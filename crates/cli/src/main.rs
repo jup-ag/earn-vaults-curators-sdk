@@ -52,7 +52,7 @@ mod fluid;
 const DEFAULT_BASE_MINT: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 /// Default base/USD `PriceUpdateV2` account. The program pins the embedded feed
 /// id rather than this account address.
-const DEFAULT_BASE_ORACLE: &str = "Dpw1EAVrSB1ibxiDQyTAW6Zip3J4Btk2x4SgApQCeFbX";
+const DEFAULT_BASE_ORACLE: &str = "6HAuqASbHEh4w4REJEUUUCginTLfj1kwCh215ZLtMkrT";
 /// Default base/USD Pyth feed id, base58 of `eaa020…c94a`.
 const DEFAULT_BASE_FEED_ID: &str = "Gnt27xtC473ZT2Mw5u8wZ68Z3gULkSTb5DuxJy7eJotD";
 const JUPITER: &str = "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4";
