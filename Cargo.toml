@@ -1,0 +1,41 @@
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+anyhow = "1"
+base64 = "0.22"
+clap = { version = "4", features = ["derive", "env"] }
+codama = "0.10.0"
+codama-macros = "0.10.0"
+const-crypto = "0.3.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+solana-address = { version = "2.6", features = ["curve25519"] }
+solana-account-view = "2.0.0"
+solana-hash = "3"
+solana-instruction = "3.4.0"
+solana-instruction-view = "2.1.0"
+solana-keypair = "3.1.2"
+solana-message = "4.2.4"
+solana-program-error = "3.0.1"
+solana-signer = "3.0.1"
+solana-transaction = "4.1.5"
+thiserror = "2.0"
+ureq = { version = "2", features = ["json"] }
+wincode = { version = "0.5.5", default-features = false }
+zeropod = { git = "https://github.com/blueshift-gg/zeropod.git", rev = "b352026626173ef2106ddb86199f50bb3fc009ea", features = [
+    "solana-address",
+] }
+earn-vaults-interface = { path = "crates/interface" }
+earn-vaults-sdk = { path = "crates/sdk" }
+
+[workspace.lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+    "cfg(target_os, values(\"solana\"))",
+    "cfg(kani)",
+] }

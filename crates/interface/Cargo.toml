@@ -1,0 +1,28 @@
+[package]
+name = "earn-vaults-interface"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["rlib"]
+doctest = false
+
+[lints]
+workspace = true
+
+[package.metadata.solana]
+program-id = "JUPVau1tSdENvv7KCwFY6Geer1a442q9mAfmaRXm83g"
+
+[dependencies]
+codama-macros.workspace = true
+const-crypto.workspace = true
+solana-account-view.workspace = true
+solana-address = { workspace = true, features = ["wincode", "decode"] }
+solana-instruction-view = { workspace = true, features = ["cpi"] }
+solana-program-error.workspace = true
+wincode = { workspace = true, features = ["derive"] }
+zeropod = { workspace = true, features = ["wincode"] }
+
+[build-dependencies]
+codama.workspace = true
+serde_json = { workspace = true, features = ["preserve_order"] }

@@ -1,0 +1,17 @@
+[package]
+name = "earn-vaults-sdk"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+solana-address.workspace = true
+solana-instruction.workspace = true
+earn-vaults-interface.workspace = true
+wincode.workspace = true
+thiserror.workspace = true
+
+[lib]
+doctest = false
