@@ -13,16 +13,6 @@ use {
     anyhow::{Context, Result, anyhow, bail},
     base64::{Engine, engine::general_purpose::STANDARD as B64},
     clap::{Parser, Subcommand},
-    serde::{Deserialize, Serialize},
-    serde_json::{Value, json},
-    solana_address::Address,
-    solana_instruction::{AccountMeta, Instruction},
-    solana_signer::Signer,
-    std::{
-        path::PathBuf,
-        thread,
-        time::{Duration, SystemTime},
-    },
     earn_vaults_cli::{
         TOKEN_2022, addr, create_ata, create_ata_ix, fetch_snapshot, load_kp, mint_token_program,
         rpc, send_opts, set_fees,
@@ -43,6 +33,16 @@ use {
         },
         state::{LoanLimits, Protocol},
         zeropod::pod::{PodOption, PodU16, PodU32},
+    },
+    serde::{Deserialize, Serialize},
+    serde_json::{Value, json},
+    solana_address::Address,
+    solana_instruction::{AccountMeta, Instruction},
+    solana_signer::Signer,
+    std::{
+        path::PathBuf,
+        thread,
+        time::{Duration, SystemTime},
     },
 };
 

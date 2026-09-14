@@ -1,8 +1,8 @@
 use {
     crate::pda::derive_protocol_delegate,
+    earn_vaults_interface::{VaultInstruction, constants::EVENT_PDA},
     solana_address::Address,
     solana_instruction::{AccountMeta, Instruction},
-    earn_vaults_interface::{VaultInstruction, constants::EVENT_PDA},
 };
 
 /// `set_paused` — granular pause over `Vault.paused` (`Pause::Subscribe` /

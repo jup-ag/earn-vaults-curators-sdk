@@ -5,12 +5,12 @@ use {
         instructions::SYSTEM_PROGRAM_ID,
         pda::{derive_extra_account_metas, derive_policy, derive_share_mint},
     },
-    solana_address::Address,
-    solana_instruction::{AccountMeta, Instruction},
     earn_vaults_interface::{
         VaultInstruction,
         constants::{EVENT_PDA, HOOK_ID, HOOK_IX_EXECUTE, HOOK_IX_INIT_EXTRA_ACCOUNT_META_LIST},
     },
+    solana_address::Address,
+    solana_instruction::{AccountMeta, Instruction},
 };
 
 pub struct SetPausedTransfers {

@@ -1,11 +1,11 @@
 use {
     crate::SdkErrors,
-    solana_address::Address,
-    solana_instruction::{AccountMeta, Instruction},
     earn_vaults_interface::{
         VaultInstruction,
         constants::{CHAINLINK_VERIFIER_ID, MAX_SIGNED_REPORT_LEN},
     },
+    solana_address::Address,
+    solana_instruction::{AccountMeta, Instruction},
 };
 
 /// A batch of Chainlink Data Streams reports plus the verifier plumbing they

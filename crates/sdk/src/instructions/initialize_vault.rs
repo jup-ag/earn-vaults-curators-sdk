@@ -4,8 +4,6 @@ use {
         instructions::{SYSTEM_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, pod_opt},
         pda::{derive_policy, derive_share_mint, derive_vault, derive_vault_authority},
     },
-    solana_address::Address,
-    solana_instruction::{AccountMeta, Instruction},
     earn_vaults_interface::{
         VaultInstruction,
         arguments::{AssetInit, InitializeVaultArgs, PositionInit},
@@ -13,6 +11,8 @@ use {
         state::{ASSET_FLAG_CHAINLINK, MAX_ALLOWED_ASSETS, MAX_POSITIONS},
         zeropod::pod::{PodOption, PodU16, PodU64},
     },
+    solana_address::Address,
+    solana_instruction::{AccountMeta, Instruction},
 };
 
 pub struct InitializeVault<'a> {

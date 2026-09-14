@@ -3,9 +3,9 @@ use {
         instructions::TOKEN_2022_PROGRAM_ID,
         pda::{derive_share_mint, derive_vault_authority},
     },
+    earn_vaults_interface::{VaultInstruction, constants::EVENT_PDA, zeropod::pod::PodU64},
     solana_address::Address,
     solana_instruction::{AccountMeta, Instruction},
-    earn_vaults_interface::{VaultInstruction, constants::EVENT_PDA, zeropod::pod::PodU64},
 };
 
 /// Instant withdrawal: burns `shares` and pays the base asset straight to the

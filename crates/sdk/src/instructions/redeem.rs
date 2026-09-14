@@ -3,9 +3,9 @@ use {
         instructions::TOKEN_2022_PROGRAM_ID,
         pda::{derive_escrow, derive_share_mint},
     },
+    earn_vaults_interface::{VaultInstruction, constants::EVENT_PDA, zeropod::pod::PodU64},
     solana_address::Address,
     solana_instruction::{AccountMeta, Instruction},
-    earn_vaults_interface::{VaultInstruction, constants::EVENT_PDA, zeropod::pod::PodU64},
 };
 
 /// Burns the user's shares (atomic, matching GLAM's burn-on-enqueue model)

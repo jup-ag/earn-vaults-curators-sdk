@@ -3,9 +3,9 @@ use {
         instructions::SYSTEM_PROGRAM_ID,
         pda::{derive_escrow, derive_escrow_token_account},
     },
+    earn_vaults_interface::{VaultInstruction, constants::EVENT_PDA, zeropod::pod::PodU64},
     solana_address::Address,
     solana_instruction::{AccountMeta, Instruction},
-    earn_vaults_interface::{VaultInstruction, constants::EVENT_PDA, zeropod::pod::PodU64},
 };
 
 pub struct Subscribe {

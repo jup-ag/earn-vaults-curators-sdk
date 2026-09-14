@@ -1,7 +1,5 @@
 use {
     crate::instructions::pod_opt,
-    solana_address::Address,
-    solana_instruction::{AccountMeta, Instruction},
     earn_vaults_interface::{
         VaultInstruction,
         arguments::{AssetAdd, AssetUpdate, PositionAdd, PositionUpdate, UpdateVaultArgs},
@@ -9,6 +7,8 @@ use {
         state::{ASSET_FLAG_CHAINLINK, ASSET_FLAG_DEPOSIT_ENABLED, LoanLimits},
         zeropod::pod::PodOption,
     },
+    solana_address::Address,
+    solana_instruction::{AccountMeta, Instruction},
 };
 
 /// Curator-only knob update. `None` fields are left untouched on the vault.

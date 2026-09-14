@@ -6,9 +6,9 @@ use {
             derive_vault_authority,
         },
     },
+    earn_vaults_interface::{VaultInstruction, constants::EVENT_PDA},
     solana_address::Address,
     solana_instruction::{AccountMeta, Instruction},
-    earn_vaults_interface::{VaultInstruction, constants::EVENT_PDA},
 };
 
 /// Crystallize accrued fees as newly minted shares. Permissionless — `signer`

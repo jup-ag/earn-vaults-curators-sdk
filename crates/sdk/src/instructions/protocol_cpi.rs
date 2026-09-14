@@ -1,8 +1,8 @@
 use {
     crate::pda::derive_protocol_delegate,
+    earn_vaults_interface::VaultInstruction,
     solana_address::Address,
     solana_instruction::{AccountMeta, Instruction},
-    earn_vaults_interface::VaultInstruction,
 };
 
 /// Builder for `ProtocolCPI`. The on-chain dispatcher routes on

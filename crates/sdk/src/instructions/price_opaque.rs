@@ -1,10 +1,10 @@
 use {
     crate::pda::derive_protocol_delegate,
-    solana_address::Address,
-    solana_instruction::{AccountMeta, Instruction},
     earn_vaults_interface::{
         VaultInstruction, arguments::PriceOpaqueArgs, constants::EVENT_PDA, zeropod::pod::PodU64,
     },
+    solana_address::Address,
+    solana_instruction::{AccountMeta, Instruction},
 };
 
 /// `price_opaque` — delegate-only (`permissions::vault::PRICE`). Posts

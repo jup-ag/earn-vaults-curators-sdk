@@ -1,5 +1,5 @@
 pub use earn_vaults_interface::*;
-use {thiserror::Error, earn_vaults_interface::zeropod::ZeroPodError};
+use {earn_vaults_interface::zeropod::ZeroPodError, thiserror::Error};
 
 pub mod instructions;
 pub mod nav;

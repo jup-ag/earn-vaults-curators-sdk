@@ -1,8 +1,8 @@
 use {
     crate::{instructions::SYSTEM_PROGRAM_ID, pda::derive_protocol_delegate},
+    earn_vaults_interface::{VaultInstruction, zeropod::pod::PodU64},
     solana_address::Address,
     solana_instruction::{AccountMeta, Instruction},
-    earn_vaults_interface::{VaultInstruction, zeropod::pod::PodU64},
 };
 
 /// Curator-only `grant_revoke_delegate`.

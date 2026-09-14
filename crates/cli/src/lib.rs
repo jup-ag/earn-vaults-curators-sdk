@@ -6,6 +6,15 @@
 use {
     anyhow::{Result, anyhow, bail},
     base64::{Engine, engine::general_purpose::STANDARD as B64},
+    earn_vaults_interface::{
+        constants::{VIRTUAL_ASSETS, VIRTUAL_SHARES},
+        nav::nav_per_share,
+        state::{Account as StateAccount, Vault},
+    },
+    earn_vaults_sdk::pda::{
+        ASSOCIATED_TOKEN_PROGRAM_ID, derive_associated_token_account, derive_share_mint,
+        derive_vault_authority,
+    },
     serde_json::{Value, json},
     solana_address::Address,
     solana_hash::Hash,
@@ -20,15 +29,6 @@ use {
         sync::atomic::{AtomicU32, AtomicU64, Ordering},
         thread,
         time::Duration,
-    },
-    earn_vaults_interface::{
-        constants::{VIRTUAL_ASSETS, VIRTUAL_SHARES},
-        nav::nav_per_share,
-        state::{Account as StateAccount, Vault},
-    },
-    earn_vaults_sdk::pda::{
-        ASSOCIATED_TOKEN_PROGRAM_ID, derive_associated_token_account, derive_share_mint,
-        derive_vault_authority,
     },
 };
 

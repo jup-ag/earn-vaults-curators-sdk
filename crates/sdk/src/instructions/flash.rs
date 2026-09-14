@@ -2,9 +2,9 @@ use {
     crate::pda::{
         derive_associated_token_account, derive_protocol_delegate, derive_vault_authority,
     },
+    earn_vaults_interface::{VaultInstruction, constants::EVENT_PDA, zeropod::pod::PodU64},
     solana_address::Address,
     solana_instruction::{AccountMeta, Instruction},
-    earn_vaults_interface::{VaultInstruction, constants::EVENT_PDA, zeropod::pod::PodU64},
 };
 
 /// Instructions sysvar used to validate the flash pair.

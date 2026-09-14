@@ -4,9 +4,9 @@ use {
         instructions::TOKEN_PROGRAM_ID,
         pda::{derive_policy, derive_share_mint, derive_vault_authority},
     },
+    earn_vaults_interface::VaultInstruction,
     solana_address::Address,
     solana_instruction::{AccountMeta, Instruction},
-    earn_vaults_interface::VaultInstruction,
 };
 
 /// Curator closes a wound-down vault: the vault state, the share mint and any

@@ -6,12 +6,12 @@ use {
             derive_share_mint,
         },
     },
-    solana_address::Address,
-    solana_instruction::{AccountMeta, Instruction},
     earn_vaults_interface::{
         VaultInstruction,
         constants::{EVENT_PDA, HOOK_ID},
     },
+    solana_address::Address,
+    solana_instruction::{AccountMeta, Instruction},
 };
 
 pub struct Claim {

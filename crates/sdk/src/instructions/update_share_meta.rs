@@ -4,13 +4,13 @@ use {
         instructions::{SYSTEM_PROGRAM_ID, TOKEN_2022_PROGRAM_ID},
         pda::{derive_share_mint, derive_vault_authority},
     },
-    solana_address::Address,
-    solana_instruction::{AccountMeta, Instruction},
     earn_vaults_interface::{
         VaultInstruction,
         arguments::UpdateShareMetaArgs,
         zeropod::pod::{PodOption, PodString},
     },
+    solana_address::Address,
+    solana_instruction::{AccountMeta, Instruction},
 };
 
 /// Curator-only update of the share mint's Token-2022 metadata. `None` fields

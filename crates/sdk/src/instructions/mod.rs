@@ -26,8 +26,8 @@ mod update_vault;
 mod validate_aum;
 
 use {
-    solana_address::Address,
     earn_vaults_interface::{VaultInstruction, zeropod::pod::PodOption},
+    solana_address::Address,
 };
 
 /// Wrap an `Option<T>` in its zero-copy wire representation.

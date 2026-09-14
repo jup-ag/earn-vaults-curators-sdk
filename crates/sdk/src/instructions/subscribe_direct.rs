@@ -3,9 +3,9 @@ use {
         instructions::{SYSTEM_PROGRAM_ID, TOKEN_2022_PROGRAM_ID},
         pda::{ASSOCIATED_TOKEN_PROGRAM_ID, derive_share_mint, derive_vault_authority},
     },
+    earn_vaults_interface::{VaultInstruction, constants::EVENT_PDA, zeropod::pod::PodU64},
     solana_address::Address,
     solana_instruction::{AccountMeta, Instruction},
-    earn_vaults_interface::{VaultInstruction, constants::EVENT_PDA, zeropod::pod::PodU64},
 };
 
 /// Un-queued deposit: transfers base into the vault and mints shares straight

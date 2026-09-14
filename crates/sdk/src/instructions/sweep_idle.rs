@@ -1,8 +1,8 @@
 use {
     crate::pda::{derive_associated_token_account, derive_share_mint, derive_vault_authority},
+    earn_vaults_interface::{VaultInstruction, constants::EVENT_PDA},
     solana_address::Address,
     solana_instruction::{AccountMeta, Instruction},
-    earn_vaults_interface::{VaultInstruction, constants::EVENT_PDA},
 };
 
 /// Curator sweeps a listed asset's residual custody balance out of a vault

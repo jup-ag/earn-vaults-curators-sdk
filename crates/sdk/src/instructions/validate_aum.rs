@@ -1,7 +1,7 @@
 use {
+    earn_vaults_interface::{VaultInstruction, constants::EVENT_PDA},
     solana_address::Address,
     solana_instruction::{AccountMeta, Instruction},
-    earn_vaults_interface::{VaultInstruction, constants::EVENT_PDA},
 };
 
 /// Recompute `Vault.aum` from live custody balances and the last posted position

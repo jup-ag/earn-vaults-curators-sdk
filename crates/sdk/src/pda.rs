@@ -4,7 +4,6 @@
 //! share a single source of truth.
 
 use {
-    solana_address::Address,
     earn_vaults_interface::{
         constants::HOOK_ID,
         seeds::{
@@ -13,6 +12,7 @@ use {
             ProtocolFeeAccountSeeds, ShareMintSeeds, VaultSeeds,
         },
     },
+    solana_address::Address,
 };
 
 pub const ASSOCIATED_TOKEN_PROGRAM_ID: Address =
