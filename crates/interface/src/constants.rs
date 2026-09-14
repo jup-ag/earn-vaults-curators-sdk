@@ -65,7 +65,7 @@ pub const UNBOUNDED_BPS: u16 = u16::MAX;
 /// Freshness window an asset row falls back to when its `max_staleness_seconds`
 /// is `0` — the age a cached reading may reach at `validate_aum` and, because
 /// every settlement re-gates that cache, at every site that values off it.
-pub const DEFAULT_ASSET_STALENESS_SECONDS: i64 = 60;
+pub const DEFAULT_ASSET_STALENESS_SECONDS: i64 = 15;
 
 /// Settlement-grade freshness: the age past which a cached reading may not
 /// *size a money-moving settlement*: direct and queued share issuance, direct
