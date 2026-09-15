@@ -11,19 +11,8 @@ pub const EVENT_PDA: (Address, u8) =
 
 pub const MAX_ACTION_ACCOUNTS: usize = 54;
 
-/// Protocol's annual management fee on vault AUM, in bps. This is additive to
-/// the per-vault curator management fee in
-/// [`Vault.management_fee_bps`](crate::state::Vault). 0.25%/yr. Treat this as
-/// immutable after deployment unless all outstanding fee capital-time is
-/// settled at an explicit migration boundary.
-pub const PROTOCOL_MANAGEMENT_FEE_BPS: u16 = 25;
-
-/// Protocol's performance fee on net-new NAV gains above the vault's
-/// high-water mark, in bps. This is additive to the per-vault curator
-/// performance fee in [`Vault.performance_fee_bps`](crate::state::Vault). 2.5%.
-/// Treat this as immutable after deployment unless all accrued and unbooked
-/// high-water-mark gains are settled at an explicit migration boundary.
-pub const PROTOCOL_PERFORMANCE_FEE_BPS: u16 = 250;
+pub const PROTOCOL_MANAGEMENT_FEE_BPS: u16 = 0;
+pub const PROTOCOL_PERFORMANCE_FEE_BPS: u16 = 0;
 
 /// Cap on the per-vault HWM `Vault.performance_fee_bps`. The charge is booked
 /// only on NAV gains above the high-water mark; folded fee debt is separately
