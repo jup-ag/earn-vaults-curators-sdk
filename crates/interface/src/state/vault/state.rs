@@ -380,7 +380,7 @@ impl Vault {
     pub fn write_down_unpayable_fees(&mut self, eff_supply: u64, now: i64) {
         const DENOM: u128 = 10_000 * SECONDS_PER_YEAR;
         let cap = self.fee_payable_cap();
-        let bps = self.streaming_bps(); // includes the protocol rate, so never 0
+        let bps = self.streaming_bps();
         let prior_capital_time = u128::from(self.fee_capital_time);
         let prior_perf = u64::from(self.perf_fee_accrued);
 
@@ -425,7 +425,7 @@ impl Vault {
     #[inline]
     pub fn take_fees(&mut self) -> FeeBreakdown {
         const DENOM: u128 = 10_000 * SECONDS_PER_YEAR;
-        let bps = self.streaming_bps(); // includes the non-zero protocol rate
+        let bps = self.streaming_bps();
         let capital_time = u128::from(self.fee_capital_time);
         let streaming = capital_time.saturating_mul(bps) / DENOM;
         let curator_management =
@@ -445,13 +445,18 @@ impl Vault {
         // Consume the least capital-time that fully covers the whole units
         // paid. The remaining fraction stays below one unit and carries into a
         // later crystallization.
-        let consumed = take_streaming.saturating_mul(DENOM).saturating_add(bps - 1) / bps;
+        let consumed = if bps == 0 {
+            capital_time // No claim accrued during the fee-free interval.
+        } else {
+            take_streaming.saturating_mul(DENOM).div_ceil(bps)
+        };
         self.fee_capital_time = PodU128::from(capital_time.saturating_sub(consumed));
         self.perf_fee_accrued = PodU64::from(narrow(perf.saturating_sub(take_perf)));
 
-        let performance_bps = self.performance_bps(); // includes the non-zero protocol rate
-        let curator_performance =
-            take_perf.saturating_mul(u128::from(self.performance_fee_bps.get())) / performance_bps;
+        let curator_performance = take_perf
+            .saturating_mul(u128::from(self.performance_fee_bps.get()))
+            .checked_div(self.performance_bps())
+            .unwrap_or(0);
         FeeBreakdown {
             curator_management: narrow(take_curator_management),
             protocol_management: narrow(take_streaming.saturating_sub(take_curator_management)),
@@ -1023,10 +1028,10 @@ mod tests {
     fn per_second_crystallization_cannot_grind_the_streaming_fee_away() {
         const SUPPLY: u64 = BASE;
         // Small enough that one second of accrual is worth well under one
-        // numéraire unit at the protocol management rate, but large enough for
+        // numéraire unit at 25 bps, but large enough for
         // the full window to accrue several whole units.
         let mut v = vault(BASE);
-        v.management_fee_bps = PodU16::ZERO;
+        v.management_fee_bps = PodU16::from(25u16);
 
         let mut ground = 0u64;
         for t in 1..=600i64 {
@@ -1036,7 +1041,7 @@ mod tests {
 
         // The honest baseline: leave it alone and collect once at the end.
         let mut honest = vault(BASE);
-        honest.management_fee_bps = PodU16::ZERO;
+        honest.management_fee_bps = PodU16::from(25u16);
         honest.accrue_fees(SUPPLY, 600);
         let collected = honest.take_fees().total();
 
@@ -1049,14 +1054,13 @@ mod tests {
     }
 
     #[test]
-    fn management_and_performance_split_between_curator_and_protocol() {
+    fn zero_protocol_rates_leave_management_and_performance_fees_with_curator() {
         const AUM: u64 = 1_000_000_000;
         let mut v = vault(AUM);
         v.management_fee_bps = PodU16::from(75u16);
         v.performance_fee_bps = PodU16::from(750u16);
         v.fee_capital_time = PodU128::from(u128::from(AUM) * SECONDS_PER_YEAR);
-        // One unit beyond an exact 75:25 split proves the protocol receives
-        // the division remainder without creating or losing fee assets.
+        // The entire booked claim, including its last unit, goes to the curator.
         v.perf_fee_accrued = PodU64::from(100_000_001u64);
 
         let fees = v.take_fees();
@@ -1064,14 +1068,37 @@ mod tests {
             fees,
             FeeBreakdown {
                 curator_management: 7_500_000,
-                protocol_management: 2_500_000,
-                curator_performance: 75_000_000,
-                protocol_performance: 25_000_001,
+                protocol_management: 0,
+                curator_performance: 100_000_001,
+                protocol_performance: 0,
             }
         );
-        assert_eq!(fees.total(), 110_000_001);
+        assert_eq!(fees.total(), 107_500_001);
         assert!(v.fee_capital_time.is_zero());
         assert!(v.perf_fee_accrued.is_zero());
+    }
+
+    #[test]
+    fn fee_rates_can_be_zero_independently() {
+        for (management, performance) in [(0u16, 0u16), (0, 1_000), (100, 0), (100, 1_000)] {
+            let mut v = vault(2 * BASE);
+            v.management_fee_bps = PodU16::from(management);
+            v.performance_fee_bps = PodU16::from(performance);
+            let now = SECONDS_PER_YEAR as i64;
+            v.accrue_fees(BASE, now);
+            let liability = v.raw_fee_liability(BASE, now);
+            let fees = v.take_fees();
+            assert_eq!(fees.curator_management > 0, management > 0);
+            assert_eq!(fees.curator_performance > 0, performance > 0);
+            assert_eq!(fees.protocol_total(), 0);
+            assert_eq!(fees.total(), liability);
+            assert!(v.fee_capital_time.is_zero());
+            assert!(v.perf_fee_accrued.is_zero());
+            if management == 0 && performance == 0 {
+                assert_eq!(fees.total(), 0);
+                assert_eq!(v.eff_aum(BASE, now), 2 * BASE);
+            }
+        }
     }
 
     #[test]
@@ -1150,9 +1177,9 @@ mod tests {
         const SUPPLY: u64 = BASE;
 
         let mut v = vault(BASE);
+        v.management_fee_bps = PodU16::from(25u16);
         v.performance_fee_bps = PodU16::ZERO;
-        v.fee_capital_time =
-            PodU128::from(u128::from(STREAMING) * DENOM / u128::from(PROTOCOL_MANAGEMENT_FEE_BPS));
+        v.fee_capital_time = PodU128::from(u128::from(STREAMING) * DENOM / v.streaming_bps());
         v.perf_fee_accrued = PodU64::from(PERF);
         v.write_down_unpayable_fees(SUPPLY, 0);
 
