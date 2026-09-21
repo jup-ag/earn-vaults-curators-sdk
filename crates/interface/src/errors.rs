@@ -49,6 +49,12 @@ pub enum VaultError {
     FeeAmountTooSmall,
     /// Borrowing is unconfigured or the proposed loan exceeds policy.
     LoanLimitExceeded,
+    /// `ccip_send` targets a chain or receiver other than the vault's CCIP lane policy.
+    CcipLaneMismatch,
+    /// A Nest mint/redeem differs from the vault's Nest route policy.
+    NestRouteMismatch,
+    /// The temporary Nest redeem handoff is not followed by the exact OFT send it authorized.
+    NestRedeemSequenceInvalid,
 }
 
 impl From<VaultError> for ProgramError {
@@ -98,7 +104,7 @@ impl ToStr for VaultError {
                 "Custody holds base the recorded AUM has never priced — run validate_aum first"
             }
             Self::VaultNotEmpty => {
-                "Vault still has outstanding shares or in-flight redeems — cannot be closed"
+                "Vault still has outstanding shares, in-flight redeems, or delegates — cannot be closed"
             }
             Self::SwapSlippageBudgetExceeded => {
                 "Routed swap would exceed the vault's cumulative slippage bucket"
@@ -169,6 +175,20 @@ impl ToStr for VaultError {
                 "flash_deposit / flash_withdraw must be top-level instructions — the \
                  introspection that bounds the liability to one transaction cannot see \
                  a CPI"
+            }
+            Self::CcipLaneMismatch => {
+                "ccip_send must target exactly the chain selector and receiver of the \
+                 vault's CCIP lane policy (curator-set via update_vault; none = bridging \
+                 disabled)"
+            }
+            Self::NestRouteMismatch => {
+                "the Nest burn / OFT send must target exactly the composer and relayer of \
+                 the vault's Nest route policy (curator-set via update_vault; none = Nest \
+                 disabled)"
+            }
+            Self::NestRedeemSequenceInvalid => {
+                "prepare_nest_redeem must be top-level and immediately followed by the exact \
+                 curator-pinned Nest OFT send"
             }
         }
     }

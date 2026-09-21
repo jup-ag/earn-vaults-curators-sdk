@@ -119,7 +119,7 @@ pub enum VaultInstruction<'de> {
     #[codama(account(name = "program"))]
     SetPausedTransfers { paused: &'de u8 },
     #[codama(account(name = "curator", signer, writable))]
-    #[codama(account(name = "vault"))]
+    #[codama(account(name = "vault", writable))]
     #[codama(account(name = "delegate", writable))]
     #[codama(account(name = "delegateAuthority"))]
     #[codama(account(name = "protocolId"))]
@@ -307,6 +307,16 @@ pub enum VaultInstruction<'de> {
     #[codama(account(name = "eventAuthority"))]
     #[codama(account(name = "program"))]
     ClaimFees,
+    #[codama(account(name = "signer", signer))]
+    #[codama(account(name = "delegate"))]
+    #[codama(account(name = "vault", writable))]
+    #[codama(account(name = "vaultAuthority"))]
+    #[codama(account(name = "shareMint"))]
+    #[codama(account(name = "vaultShareAccount", writable))]
+    #[codama(account(name = "signerShareAccount", writable))]
+    #[codama(account(name = "tokenProgram"))]
+    #[codama(account(name = "instructionsSysvar"))]
+    PrepareNestRedeem,
     #[codama(skip)]
     Event = 254,
 }
@@ -387,6 +397,7 @@ unsafe impl<'de, C: Config> SchemaRead<'de, C> for VaultInstruction<'de> {
                 amount: <&PodU64 as SchemaRead<'de, C>>::get(reader)?,
             },
             26 => Self::ClaimFees,
+            27 => Self::PrepareNestRedeem,
             254 => Self::Event,
             tag => return Err(ReadError::InvalidTagEncoding(tag as usize)),
         };

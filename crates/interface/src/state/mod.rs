@@ -23,7 +23,8 @@ pub trait Account:
 
     /// Return `Self` from the given account, after verifying the program owns
     /// it and its data starts with [`Self::DISCRIMINATOR`] (length is checked
-    /// by [`Account::read`]).
+    /// by [`Account::read`]: exactly [`Self::LEN`], so a stale-layout account
+    /// fails closed instead of parsing with shifted fields).
     ///
     /// # Safety
     ///
@@ -66,6 +67,9 @@ pub trait Account:
 
     #[inline(always)]
     fn read_mut(data: &mut [u8]) -> Result<&mut Self, ProgramError> {
+        if data.len() != Self::LEN {
+            return Err(ProgramError::InvalidAccountData);
+        }
         let (dis, data) = data
             .split_first_mut()
             .ok_or(ProgramError::InvalidAccountData)?;
@@ -79,6 +83,9 @@ pub trait Account:
 
     #[inline(always)]
     fn read(data: &[u8]) -> Result<&Self, ProgramError> {
+        if data.len() != Self::LEN {
+            return Err(ProgramError::InvalidAccountData);
+        }
         let (dis, data) = data.split_first().ok_or(ProgramError::InvalidAccountData)?;
 
         if *dis != Self::DISCRIMINATOR {
@@ -106,6 +113,16 @@ pub enum Protocol {
     Offerbook,
     /// Jupiter Lend (Fluid) lend/borrow loop — vaults + liquidity programs.
     JupiterLend,
+    /// Custody bridged out through Chainlink CCIP to the curator's lane on
+    /// another chain. The mark is the cost basis folded by `ccip_send`, then
+    /// whatever the `PRICE` delegate attests the remote position is worth.
+    Ccip,
+    /// USDC deposited into a Nest vault (nest.credit) through its Solana
+    /// path: a CCTP v2 burn toward the Nest relayer on Plume, with shares
+    /// delivered back by LayerZero OFT. The mark is the cost basis folded by
+    /// the burn, then whatever the `PRICE` delegate attests the shares (and
+    /// anything in flight) are worth.
+    Nest,
 }
 
 impl Protocol {
@@ -122,6 +139,8 @@ impl Protocol {
             0 => Some(Self::SpotTokens),
             1 => Some(Self::Offerbook),
             2 => Some(Self::JupiterLend),
+            3 => Some(Self::Ccip),
+            4 => Some(Self::Nest),
             _ => None,
         }
     }
@@ -136,7 +155,7 @@ impl Protocol {
         match self {
             // Never a fold target — `price_opaque` is the only writer.
             Self::SpotTokens => false,
-            Self::Offerbook | Self::JupiterLend => true,
+            Self::Offerbook | Self::JupiterLend | Self::Ccip | Self::Nest => true,
         }
     }
 }

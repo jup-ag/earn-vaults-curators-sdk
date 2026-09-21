@@ -587,10 +587,35 @@
             },
             {
               "kind": "structFieldTypeNode",
-              "name": "offerbookLimits",
+              "name": "policies",
               "type": {
-                "kind": "definedTypeLinkNode",
-                "name": "loanLimits"
+                "kind": "arrayTypeNode",
+                "item": {
+                  "kind": "definedTypeLinkNode",
+                  "name": "protocolPolicy"
+                },
+                "count": {
+                  "kind": "fixedCountNode",
+                  "value": 8
+                }
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "aumConfBps",
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "u16",
+                "endian": "le"
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "delegateCount",
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "u8",
+                "endian": "le"
               }
             },
             {
@@ -605,7 +630,7 @@
                 },
                 "count": {
                   "kind": "fixedCountNode",
-                  "value": 6
+                  "value": 3
                 }
               }
             }
@@ -1478,7 +1503,7 @@
           {
             "kind": "instructionAccountNode",
             "name": "vault",
-            "isWritable": false,
+            "isWritable": true,
             "isSigner": false
           },
           {
@@ -2948,6 +2973,89 @@
             "offset": 0
           }
         ]
+      },
+      {
+        "kind": "instructionNode",
+        "name": "prepareNestRedeem",
+        "accounts": [
+          {
+            "kind": "instructionAccountNode",
+            "name": "signer",
+            "isWritable": false,
+            "isSigner": true
+          },
+          {
+            "kind": "instructionAccountNode",
+            "name": "delegate",
+            "isWritable": false,
+            "isSigner": false
+          },
+          {
+            "kind": "instructionAccountNode",
+            "name": "vault",
+            "isWritable": true,
+            "isSigner": false
+          },
+          {
+            "kind": "instructionAccountNode",
+            "name": "vaultAuthority",
+            "isWritable": false,
+            "isSigner": false
+          },
+          {
+            "kind": "instructionAccountNode",
+            "name": "shareMint",
+            "isWritable": false,
+            "isSigner": false
+          },
+          {
+            "kind": "instructionAccountNode",
+            "name": "vaultShareAccount",
+            "isWritable": true,
+            "isSigner": false
+          },
+          {
+            "kind": "instructionAccountNode",
+            "name": "signerShareAccount",
+            "isWritable": true,
+            "isSigner": false
+          },
+          {
+            "kind": "instructionAccountNode",
+            "name": "tokenProgram",
+            "isWritable": false,
+            "isSigner": false
+          },
+          {
+            "kind": "instructionAccountNode",
+            "name": "instructionsSysvar",
+            "isWritable": false,
+            "isSigner": false
+          }
+        ],
+        "arguments": [
+          {
+            "kind": "instructionArgumentNode",
+            "name": "discriminator",
+            "defaultValueStrategy": "omitted",
+            "type": {
+              "kind": "numberTypeNode",
+              "format": "u8",
+              "endian": "le"
+            },
+            "defaultValue": {
+              "kind": "numberValueNode",
+              "number": 27
+            }
+          }
+        ],
+        "discriminators": [
+          {
+            "kind": "fieldDiscriminatorNode",
+            "name": "discriminator",
+            "offset": 0
+          }
+        ]
       }
     ],
     "definedTypes": [
@@ -3009,15 +3117,6 @@
                   "format": "u8",
                   "endian": "le"
                 }
-              }
-            },
-            {
-              "kind": "structFieldTypeNode",
-              "name": "haircutBps",
-              "type": {
-                "kind": "numberTypeNode",
-                "format": "u16",
-                "endian": "le"
               }
             }
           ]
@@ -3705,24 +3804,6 @@
             },
             {
               "kind": "structFieldTypeNode",
-              "name": "haircutBps",
-              "type": {
-                "kind": "optionTypeNode",
-                "fixed": true,
-                "item": {
-                  "kind": "numberTypeNode",
-                  "format": "u16",
-                  "endian": "le"
-                },
-                "prefix": {
-                  "kind": "numberTypeNode",
-                  "format": "u8",
-                  "endian": "le"
-                }
-              }
-            },
-            {
-              "kind": "structFieldTypeNode",
               "name": "reset",
               "type": {
                 "kind": "optionTypeNode",
@@ -3862,15 +3943,6 @@
                   "endian": "le"
                 }
               }
-            },
-            {
-              "kind": "structFieldTypeNode",
-              "name": "haircutBps",
-              "type": {
-                "kind": "numberTypeNode",
-                "format": "u16",
-                "endian": "le"
-              }
             }
           ]
         }
@@ -3883,13 +3955,13 @@
           "fields": [
             {
               "kind": "structFieldTypeNode",
-              "name": "offerbookLimits",
+              "name": "policy",
               "type": {
                 "kind": "optionTypeNode",
                 "fixed": true,
                 "item": {
                   "kind": "definedTypeLinkNode",
-                  "name": "loanLimits"
+                  "name": "protocolPolicy"
                 },
                 "prefix": {
                   "kind": "numberTypeNode",
@@ -4379,6 +4451,31 @@
       },
       {
         "kind": "definedTypeNode",
+        "name": "ccipLane",
+        "type": {
+          "kind": "structTypeNode",
+          "fields": [
+            {
+              "kind": "structFieldTypeNode",
+              "name": "destChainSelector",
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "u64",
+                "endian": "le"
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "receiver",
+              "type": {
+                "kind": "publicKeyTypeNode"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "kind": "definedTypeNode",
         "name": "loanLimits",
         "type": {
           "kind": "structTypeNode",
@@ -4449,6 +4546,63 @@
       },
       {
         "kind": "definedTypeNode",
+        "name": "nestRoute",
+        "type": {
+          "kind": "structTypeNode",
+          "fields": [
+            {
+              "kind": "structFieldTypeNode",
+              "name": "composer",
+              "type": {
+                "kind": "arrayTypeNode",
+                "item": {
+                  "kind": "numberTypeNode",
+                  "format": "u8",
+                  "endian": "le"
+                },
+                "count": {
+                  "kind": "fixedCountNode",
+                  "value": 20
+                }
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "relayer",
+              "type": {
+                "kind": "arrayTypeNode",
+                "item": {
+                  "kind": "numberTypeNode",
+                  "format": "u8",
+                  "endian": "le"
+                },
+                "count": {
+                  "kind": "fixedCountNode",
+                  "value": 20
+                }
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "oftCommitment",
+              "type": {
+                "kind": "arrayTypeNode",
+                "item": {
+                  "kind": "numberTypeNode",
+                  "format": "u8",
+                  "endian": "le"
+                },
+                "count": {
+                  "kind": "fixedCountNode",
+                  "value": 23
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "kind": "definedTypeNode",
         "name": "positionConfig",
         "type": {
           "kind": "structTypeNode",
@@ -4491,15 +4645,6 @@
             },
             {
               "kind": "structFieldTypeNode",
-              "name": "haircutBps",
-              "type": {
-                "kind": "numberTypeNode",
-                "format": "u16",
-                "endian": "le"
-              }
-            },
-            {
-              "kind": "structFieldTypeNode",
               "name": "lastValue",
               "type": {
                 "kind": "numberTypeNode",
@@ -4514,6 +4659,40 @@
                 "kind": "numberTypeNode",
                 "format": "i64",
                 "endian": "le"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "kind": "definedTypeNode",
+        "name": "protocolPolicy",
+        "type": {
+          "kind": "structTypeNode",
+          "fields": [
+            {
+              "kind": "structFieldTypeNode",
+              "name": "protocol",
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "u8",
+                "endian": "le"
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "bytes",
+              "type": {
+                "kind": "arrayTypeNode",
+                "item": {
+                  "kind": "numberTypeNode",
+                  "format": "u8",
+                  "endian": "le"
+                },
+                "count": {
+                  "kind": "fixedCountNode",
+                  "value": 63
+                }
               }
             }
           ]
@@ -4579,6 +4758,14 @@
             {
               "kind": "enumEmptyVariantTypeNode",
               "name": "jupiterLend"
+            },
+            {
+              "kind": "enumEmptyVariantTypeNode",
+              "name": "ccip"
+            },
+            {
+              "kind": "enumEmptyVariantTypeNode",
+              "name": "nest"
             }
           ],
           "size": {
@@ -5928,6 +6115,24 @@
         "kind": "errorNode",
         "name": "loanLimitExceeded",
         "code": 240,
+        "message": ""
+      },
+      {
+        "kind": "errorNode",
+        "name": "ccipLaneMismatch",
+        "code": 241,
+        "message": ""
+      },
+      {
+        "kind": "errorNode",
+        "name": "nestRouteMismatch",
+        "code": 242,
+        "message": ""
+      },
+      {
+        "kind": "errorNode",
+        "name": "nestRedeemSequenceInvalid",
+        "code": 243,
         "message": ""
       }
     ]

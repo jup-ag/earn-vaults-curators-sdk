@@ -1,5 +1,5 @@
 use {
-    crate::state::LoanLimits,
+    crate::state::ProtocolPolicy,
     codama_macros::CodamaType,
     solana_address::Address,
     wincode::{SchemaRead, SchemaWrite},
@@ -85,10 +85,6 @@ pub struct PositionUpdate {
     /// Per-position drift override; `0` means the global default.
     #[codama(type = option(number(u16, le), fixed))]
     pub max_drift_bps: PodOption<PodU16>,
-    /// Haircut applied to the mark in `validate_aum`; `10_000` writes the
-    /// position off entirely.
-    #[codama(type = option(number(u16, le), fixed))]
-    pub haircut_bps: PodOption<PodU16>,
     /// `Some(1)` resets a non-DEBT row to never-priced (clears `PRICED` /
     /// `INITIALIZED`, zeroes the mark), so the next `price_opaque` bootstraps
     /// again against the last validated AUM. The unbrick path for an asset-like
@@ -102,7 +98,6 @@ impl ZcValidate for PositionUpdate {
     fn validate_ref(value: &Self) -> Result<(), ZeroPodError> {
         PodOption::validate_ref(&value.max_staleness_seconds)?;
         PodOption::validate_ref(&value.max_drift_bps)?;
-        PodOption::validate_ref(&value.haircut_bps)?;
         PodOption::validate_ref(&value.reset)
     }
 }
@@ -169,9 +164,6 @@ pub struct PositionAdd {
     /// waives it, `Some(n)` = `n` bps.
     #[codama(type = option(number(u16, le), fixed))]
     pub max_drift_bps: PodOption<PodU16>,
-    /// Haircut applied to the mark in `validate_aum`.
-    #[codama(type = number(u16))]
-    pub haircut_bps: PodU16,
 }
 
 impl ZcValidate for PositionAdd {
@@ -188,9 +180,11 @@ unsafe impl ZcElem for PositionAdd {}
 #[wincode(assert_zero_copy)]
 #[repr(C)]
 pub struct UpdateVaultArgs {
-    /// Replace borrowing limits; `Some(zero)` disables new Offerbook loans.
-    #[codama(type = option(link("loanLimits"), fixed))]
-    pub offerbook_limits: PodOption<LoanLimits>,
+    /// Set one protocol's curator policy (Offerbook `LoanLimits`, CCIP
+    /// `CcipLane`, Nest `NestRoute`, …) by tag; an all-zero payload disables that protocol and
+    /// frees its slot. See [`ProtocolPolicy`].
+    #[codama(type = option(link("protocolPolicy"), fixed))]
+    pub policy: PodOption<ProtocolPolicy>,
     #[codama(type = option(number(u8), fixed))]
     pub paused: PodOption<u8>,
     #[codama(type = option(number(u64, le), fixed))]

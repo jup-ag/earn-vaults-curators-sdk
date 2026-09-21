@@ -34,8 +34,6 @@ pub struct PositionInit {
     /// [`MAX_DRIFT_BPS`]: crate::constants::MAX_DRIFT_BPS
     #[codama(type = option(number(u16, le), fixed))]
     pub max_drift_bps: PodOption<PodU16>,
-    #[codama(type = number(u16))]
-    pub haircut_bps: PodU16,
 }
 
 #[derive(SchemaRead, SchemaWrite, Clone, Copy, CodamaType)]

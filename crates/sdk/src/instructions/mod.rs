@@ -12,6 +12,7 @@ mod fulfill_redeem;
 mod grant_revoke_delegate;
 mod initialize_vault;
 mod policy;
+mod prepare_nest_redeem;
 mod price_opaque;
 mod protocol_cpi;
 mod redeem;
@@ -50,9 +51,10 @@ pub(crate) fn encode(ix: &VaultInstruction) -> Vec<u8> {
 pub use {
     accept_curator::*, cancel::*, cancel_redeem::*, claim::*, claim_fees::*, claim_redeem::*,
     close_vault::*, crystallize_fees::*, flash::*, fulfill::*, fulfill_redeem::*,
-    grant_revoke_delegate::*, initialize_vault::*, policy::*, price_opaque::*, protocol_cpi::*,
-    redeem::*, redeem_direct::*, refresh_prices::*, set_paused::*, subscribe::*,
-    subscribe_direct::*, sweep_idle::*, update_share_meta::*, update_vault::*, validate_aum::*,
+    grant_revoke_delegate::*, initialize_vault::*, policy::*, prepare_nest_redeem::*,
+    price_opaque::*, protocol_cpi::*, redeem::*, redeem_direct::*, refresh_prices::*,
+    set_paused::*, subscribe::*, subscribe_direct::*, sweep_idle::*, update_share_meta::*,
+    update_vault::*, validate_aum::*,
 };
 
 const TOKEN_PROGRAM_ID: Address =

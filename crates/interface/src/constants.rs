@@ -11,7 +11,18 @@ pub const EVENT_PDA: (Address, u8) =
 
 pub const MAX_ACTION_ACCOUNTS: usize = 54;
 
+/// Protocol's annual management fee on vault AUM, in bps. This is additive to
+/// the per-vault curator management fee in
+/// [`Vault.management_fee_bps`](crate::state::Vault). Currently disabled. Treat this as
+/// immutable after deployment unless all outstanding fee capital-time is
+/// settled at an explicit migration boundary.
 pub const PROTOCOL_MANAGEMENT_FEE_BPS: u16 = 0;
+
+/// Protocol's performance fee on net-new NAV gains above the vault's
+/// high-water mark, in bps. This is additive to the per-vault curator
+/// performance fee in [`Vault.performance_fee_bps`](crate::state::Vault). Currently disabled.
+/// Treat this as immutable after deployment unless all accrued and unbooked
+/// high-water-mark gains are settled at an explicit migration boundary.
 pub const PROTOCOL_PERFORMANCE_FEE_BPS: u16 = 0;
 
 /// Cap on the per-vault HWM `Vault.performance_fee_bps`. The charge is booked
@@ -162,6 +173,19 @@ pub const MAX_SIGNED_REPORT_LEN: usize = 1024;
 /// Chainlink Data Streams **Verifier** program.
 pub const CHAINLINK_VERIFIER_ID: Address =
     Address::from_str_const("Gt9S41PtjR58CbG9JhJ3J6vxesqrNAswbWYbLNTMZA3c");
+
+/// Chainlink **CCIP Router** program on Solana mainnet (`ccip_send`).
+pub const CCIP_ROUTER_ID: Address =
+    Address::from_str_const("Ccip842gzYHhvdDkSyi2YVCoAWPbYJoApMFzSxQroE9C");
+
+/// Circle **CCTP v2 TokenMessengerMinter** program on Solana mainnet
+/// (`deposit_for_burn_with_hook`) — the burn leg of a Nest Solana mint.
+pub const CCTP_TOKEN_MESSENGER_MINTER_V2_ID: Address =
+    Address::from_str_const("CCTPV2vPZJS2u2BBsUoscuikbYjnpFmbFsvVuJdgUMQe");
+
+/// Nest's LayerZero OFT program on Solana mainnet (`send`).
+pub const NEST_OFT_ID: Address =
+    Address::from_str_const("ChEfPd3RzLeYiRwp1K9evimmaFSd6DV1S4Mv5q5Aj1th");
 
 pub const HOOK_ID: Address = Address::from_str_const("JUPHookQEq12nYVaRYDkaznwomoZGS7PwTS3CMMiyUa");
 pub const HOOK_IX_EXECUTE: [u8; 8] = [105, 37, 101, 197, 75, 251, 102, 26];

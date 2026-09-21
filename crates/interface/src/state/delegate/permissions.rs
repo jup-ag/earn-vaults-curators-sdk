@@ -2,7 +2,8 @@ pub mod offerbook {
     /// Create the vault's offerbook user and move listed tokens in/out of its
     /// escrow. Withdrawing an unlisted mint also requires [`CLAIM`].
     pub const ESCROW: u64 = 1 << 0;
-    /// Create a principal (lender-side) offer, and cancel any offer.
+    /// Create a principal (lender-side) offer within curator loan limits, and
+    /// cancel any offer.
     pub const OFFER: u64 = 1 << 1;
     /// Claim a filled loan's repayment/default collateral; paired with
     /// [`ESCROW`] to withdraw unlisted seized collateral into custody.
@@ -29,6 +30,23 @@ pub mod jupiter_lend {
     pub const BORROW: u64 = 1 << 1;
     /// Deposit into and withdraw from a Jupiter Earn vault.
     pub const EARN: u64 = 1 << 3;
+}
+
+pub mod ccip {
+    /// Route `ccip_send` as the vault authority: bridge one listed asset to
+    /// the curator-pinned [`CcipLane`](crate::state::CcipLane), paying the
+    /// CCIP fee from the authority's LINK/WSOL ATA or its lamports.
+    pub const SEND: u64 = 1 << 0;
+}
+
+pub mod nest {
+    /// Route CCTP v2 `deposit_for_burn_with_hook` as the vault authority: burn
+    /// listed USDC toward the curator-pinned
+    /// [`NestRoute`](crate::state::NestRoute) relayer with a hook that mints
+    /// Nest shares back to the vault authority. Granted on the CCTP program id.
+    pub const MINT: u64 = 1 << 0;
+    /// Redeem curator-pinned Nest shares through the Nest OFT program.
+    pub const REDEEM: u64 = 1 << 1;
 }
 
 pub mod vault {

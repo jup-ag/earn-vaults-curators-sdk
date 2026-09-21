@@ -8,12 +8,14 @@ use {
         },
         errors::VaultError,
         state::{
-            Account, AssetConfig, LoanLimits, MAX_ALLOWED_ASSETS, MAX_POSITIONS, MAX_SINKS,
-            PositionConfig, SinkSlot,
+            Account, AssetConfig, CcipLane, LoanLimits, MAX_ALLOWED_ASSETS, MAX_POLICIES,
+            MAX_POSITIONS, MAX_SINKS, NestRoute, PositionConfig, Protocol, ProtocolPolicy,
+            SinkSlot,
         },
     },
     codama_macros::CodamaAccount,
     solana_address::{Address, address_eq},
+    solana_program_error::ProgramError,
     wincode::{SchemaRead, SchemaWrite},
     zeropod::pod::{PodI64, PodU16, PodU64, PodU128},
 };
@@ -102,8 +104,23 @@ pub struct Vault {
     pub performance_fee_bps: PodU16,
     pub curator_fee_account_bump: u8,
     pub protocol_fee_account_bump: u8,
-    pub offerbook_limits: LoanLimits,
-    _buffer: [u8; 6],
+    /// Curator policy per routed protocol (Offerbook loan limits, the CCIP
+    /// lane, …), tagged by [`Protocol`] and decoded by the owning adapter. See
+    /// [`ProtocolPolicy`]; typed reads via [`Vault::offerbook_limits`],
+    /// [`Vault::ccip_lane`] and [`Vault::nest_route`].
+    pub policies: [ProtocolPolicy; 8],
+    /// Confidence discount `validate_aum` left in `aum`: `Σ(mid − floor)` over
+    /// the spot rows, in bps of `aum`, rounded up. Every share mint adds it
+    /// back so a band that closes on the next report pays the holders who
+    /// carried it, not the new shares (L-04). `u16::MAX` = not representable;
+    /// mints fail closed.
+    #[codama(type = number(u16))]
+    pub aum_conf_bps: PodU16,
+    /// Live `Delegate` PDAs. `grant_revoke_delegate` counts creates and
+    /// closes; `close_vault` refuses while any remain, so no grant can outlive
+    /// the vault and rebind to a same-address recreation (I-01).
+    pub delegate_count: u8,
+    _buffer: [u8; 3],
 }
 
 /// Fee assets removed from the vault's accrued liabilities by one
@@ -158,7 +175,9 @@ fn refill_slippage_bucket(
         .saturating_sub(last_refill_at)
         .clamp(0, SWAP_SLIPPAGE_WINDOW_SECONDS) as u128;
     let refilled = capacity.saturating_mul(elapsed) / SWAP_SLIPPAGE_WINDOW_SECONDS as u128;
-    let decayed = u128::from(prior_spent).saturating_sub(refilled);
+    let decayed = u128::from(prior_spent)
+        .min(capacity)
+        .saturating_sub(refilled);
     let updated = decayed.saturating_add(u128::from(charge));
     if updated > capacity {
         return Err(VaultError::SwapSlippageBudgetExceeded);
@@ -171,6 +190,60 @@ impl Vault {
     /// slots are free: `initialize_vault` admits at most one enabled slot per
     /// protocol, which is what makes "first match" unambiguous.
     #[inline]
+    /// The stored policy for `protocol`, if the curator set one.
+    pub fn policy(&self, protocol: Protocol) -> Option<&ProtocolPolicy> {
+        self.policies
+            .iter()
+            .find(|p| !p.is_free() && p.protocol == protocol as u8)
+    }
+
+    /// Store, replace, or (for a disabled all-zero payload) free `policy`'s
+    /// slot. One slot per protocol; `InvalidArgument` when every slot is taken
+    /// by another protocol.
+    pub fn set_policy(&mut self, policy: ProtocolPolicy) -> Result<(), ProgramError> {
+        let tag = policy.protocol;
+        let slot = match self
+            .policies
+            .iter()
+            .position(|p| !p.is_free() && p.protocol == tag)
+        {
+            Some(i) => i,
+            None if policy.is_disabled() => return Ok(()),
+            None => self
+                .policies
+                .iter()
+                .position(ProtocolPolicy::is_free)
+                .ok_or(ProgramError::InvalidArgument)?,
+        };
+        self.policies[slot] = if policy.is_disabled() {
+            ProtocolPolicy::zero()
+        } else {
+            policy
+        };
+        Ok(())
+    }
+
+    /// Offerbook loan policy; the all-zero value means loans are closed.
+    #[inline]
+    pub fn offerbook_limits(&self) -> LoanLimits {
+        self.policy(Protocol::Offerbook)
+            .map_or(LoanLimits::zero(), ProtocolPolicy::decode)
+    }
+
+    /// CCIP destination lane; the all-zero value means bridging is off.
+    #[inline]
+    pub fn ccip_lane(&self) -> CcipLane {
+        self.policy(Protocol::Ccip)
+            .map_or(CcipLane::zero(), ProtocolPolicy::decode)
+    }
+
+    /// Nest composer / relayer / OFT route; the all-zero value means Nest is off.
+    #[inline]
+    pub fn nest_route(&self) -> NestRoute {
+        self.policy(Protocol::Nest)
+            .map_or(NestRoute::zero(), ProtocolPolicy::decode)
+    }
+
     pub fn find_position_mut(&mut self, protocol: u8) -> Option<&mut PositionConfig> {
         self.positions
             .iter_mut()
@@ -418,16 +491,16 @@ impl Vault {
             .saturating_add(self.perf_pending(eff_supply, now))
     }
 
-    /// Debit the folded accumulators by what is handed out and split both fee
-    /// categories between curator and protocol. The pro-rata cap is defense in
-    /// depth; [`Self::accrue_fees`] normally reconciles the aggregate folded
-    /// claim to [`Self::fee_payable_cap`] before this runs.
+    /// Fee assets one crystallization would hand out, split between curator
+    /// and protocol. Pure: [`Self::debit_fees`] removes what is actually paid.
+    /// The pro-rata cap is defense in depth; [`Self::accrue_fees`] normally
+    /// reconciles the aggregate folded claim to [`Self::fee_payable_cap`]
+    /// before this runs.
     #[inline]
-    pub fn take_fees(&mut self) -> FeeBreakdown {
+    pub fn fee_breakdown(&self) -> FeeBreakdown {
         const DENOM: u128 = 10_000 * SECONDS_PER_YEAR;
-        let bps = self.streaming_bps();
         let capital_time = u128::from(self.fee_capital_time);
-        let streaming = capital_time.saturating_mul(bps) / DENOM;
+        let streaming = capital_time.saturating_mul(self.streaming_bps()) / DENOM;
         let curator_management =
             capital_time.saturating_mul(u128::from(self.management_fee_bps.get())) / DENOM;
         let perf = u128::from(u64::from(self.perf_fee_accrued));
@@ -442,17 +515,6 @@ impl Vault {
             (streaming, curator_management, perf)
         };
 
-        // Consume the least capital-time that fully covers the whole units
-        // paid. The remaining fraction stays below one unit and carries into a
-        // later crystallization.
-        let consumed = if bps == 0 {
-            capital_time // No claim accrued during the fee-free interval.
-        } else {
-            take_streaming.saturating_mul(DENOM).div_ceil(bps)
-        };
-        self.fee_capital_time = PodU128::from(capital_time.saturating_sub(consumed));
-        self.perf_fee_accrued = PodU64::from(narrow(perf.saturating_sub(take_perf)));
-
         let curator_performance = take_perf
             .saturating_mul(u128::from(self.performance_fee_bps.get()))
             .checked_div(self.performance_bps())
@@ -465,6 +527,75 @@ impl Vault {
             // exact performance liability removed from the accumulator.
             protocol_performance: narrow(take_perf.saturating_sub(curator_performance)),
         }
+    }
+
+    /// Debit the folded accumulators by exactly `paid`, a (possibly partial)
+    /// [`Self::fee_breakdown`]. A recipient's entries may be zeroed to leave
+    /// its claim in the integrals for a later crystallization.
+    #[inline]
+    pub fn debit_fees(&mut self, paid: FeeBreakdown) {
+        const DENOM: u128 = 10_000 * SECONDS_PER_YEAR;
+        let bps = self.streaming_bps();
+        let capital_time = u128::from(self.fee_capital_time);
+        let streaming = u128::from(paid.curator_management)
+            .saturating_add(u128::from(paid.protocol_management));
+        // Consume the least capital-time that fully covers the whole units
+        // paid. The remaining fraction stays below one unit and carries into a
+        // later crystallization.
+        let consumed = if bps == 0 {
+            capital_time // No claim accrued during the fee-free interval.
+        } else {
+            streaming.saturating_mul(DENOM).div_ceil(bps)
+        };
+        self.fee_capital_time = PodU128::from(capital_time.saturating_sub(consumed));
+        self.perf_fee_accrued = PodU64::from(
+            u64::from(self.perf_fee_accrued)
+                .saturating_sub(paid.curator_performance)
+                .saturating_sub(paid.protocol_performance),
+        );
+    }
+
+    /// Take everything collectible.
+    #[inline]
+    pub fn take_fees(&mut self) -> FeeBreakdown {
+        let fees = self.fee_breakdown();
+        self.debit_fees(fees);
+        fees
+    }
+
+    /// Convert each recipient's total to shares independently and debit only
+    /// what mints (L-06). A recipient whose total floors to zero shares keeps
+    /// its claim in the integrals instead of failing the other's collection.
+    /// Errors only when neither recipient can mint, so the integrals are never
+    /// touched for nothing.
+    // ponytail: the retained dust is re-split by rate next time, so up to
+    // `pb/(cb+pb)` of a sub-share amount can drift to the other recipient per
+    // event (zero while the protocol rates are 0). Per-recipient carry fields
+    // if that ever matters.
+    #[inline]
+    pub fn settle_fee_shares(
+        &mut self,
+        mut fees: FeeBreakdown,
+        eff_supply: u64,
+        fee_basis: u64,
+    ) -> Result<(FeeBreakdown, u64, u64), VaultError> {
+        let curator_shares =
+            crate::nav::shares_for_deposit(fees.curator_total(), eff_supply, fee_basis)?;
+        let protocol_shares =
+            crate::nav::shares_for_deposit(fees.protocol_total(), eff_supply, fee_basis)?;
+        if curator_shares == 0 && protocol_shares == 0 {
+            if fees.total() > 0 {
+                return Err(VaultError::FeeAmountTooSmall);
+            }
+        } else if curator_shares == 0 {
+            fees.curator_management = 0;
+            fees.curator_performance = 0;
+        } else if protocol_shares == 0 {
+            fees.protocol_management = 0;
+            fees.protocol_performance = 0;
+        }
+        self.debit_fees(fees);
+        Ok((fees, curator_shares, protocol_shares))
     }
 
     /// Charge `slippage` against the swap leaky bucket, which decays linearly
@@ -564,16 +695,17 @@ impl Account for Vault {
 }
 
 check_account_layout!(Vault);
+const _: () = assert!(core::mem::size_of::<[ProtocolPolicy; MAX_POLICIES]>() == 8 * 64);
 
 // Pin the deployed zero-copy ABI. The generic layout check above only proves
 // that `LEN` matches the current Rust type; these constants catch accidental
 // field insertion or reordering before it can strand existing vault accounts.
-const _: () = assert!(core::mem::size_of::<Vault>() == 1_771);
-const _: () = assert!(Vault::LEN == 1_772);
+const _: () = assert!(core::mem::size_of::<Vault>() == 2_209);
+const _: () = assert!(Vault::LEN == 2_210);
 const _: () = assert!(core::mem::offset_of!(Vault, management_fee_bps) == 106);
-const _: () = assert!(core::mem::offset_of!(Vault, performance_fee_bps) == 1_703);
-const _: () = assert!(core::mem::offset_of!(Vault, curator_fee_account_bump) == 1_705);
-const _: () = assert!(core::mem::offset_of!(Vault, protocol_fee_account_bump) == 1_706);
+const _: () = assert!(core::mem::offset_of!(Vault, performance_fee_bps) == 1_687);
+const _: () = assert!(core::mem::offset_of!(Vault, curator_fee_account_bump) == 1_689);
+const _: () = assert!(core::mem::offset_of!(Vault, protocol_fee_account_bump) == 1_690);
 
 // The row arrays are spelled with literal lengths because codama's IDL derive
 // cannot resolve a const there. This is the only thing keeping the literals and
@@ -638,6 +770,39 @@ mod tests {
 
     const UNIT: u64 = 1_000_000;
     const BASE: u64 = 1_000 * UNIT;
+
+    /// L-06: a curator entitlement that floors to zero shares must not block
+    /// a representable protocol entitlement, and must stay in the integrals.
+    #[test]
+    fn fee_dust_of_one_recipient_does_not_block_the_other() {
+        let mut v = vault(BASE);
+        let supply = BASE / 4; // ~4 numéraire units per share: 1 unit is dust
+        v.perf_fee_accrued = PodU64::from(4_001u64);
+        // Protocol rates are 0 today, so hand-split the folded liability the
+        // way a live protocol rate would.
+        let fees = FeeBreakdown {
+            curator_performance: 1,
+            protocol_performance: 4_000,
+            ..FeeBreakdown::default()
+        };
+
+        let eff_supply = v.eff_supply(supply);
+        let basis = v.eff_aum(supply, 0);
+        let (paid, curator, protocol) = v.settle_fee_shares(fees, eff_supply, basis).unwrap();
+        assert_eq!(curator, 0);
+        assert!(protocol > 0);
+        assert_eq!(paid.curator_total(), 0);
+        assert_eq!(paid.protocol_total(), 4_000);
+        assert_eq!(v.perf_fee_accrued.get(), 1, "curator dust must stay owed");
+
+        // Dust alone still refuses to mint and leaves the integrals untouched.
+        let fees = v.fee_breakdown();
+        assert_eq!(
+            v.settle_fee_shares(fees, eff_supply, basis),
+            Err(VaultError::FeeAmountTooSmall)
+        );
+        assert_eq!(v.perf_fee_accrued.get(), 1);
+    }
 
     #[test]
     fn sink_claims_need_curator_capacity() {
@@ -1262,6 +1427,29 @@ mod tests {
             .expect("half the swap bucket should refill in half an hour");
         v.charge_swap_slippage(swap_budget / 2, boundary - 1 + boundary)
             .expect("the remaining swap capacity should refill continuously");
+    }
+
+    // M-04: usage is stored as an absolute amount while capacity follows AUM.
+    // A shrink must not leave the bucket permanently over-full.
+    #[test]
+    fn slippage_bucket_recovers_after_aum_shrinks() {
+        let mut v = vault(BASE);
+        let budget = ((BASE as u128) * MAX_SWAP_SLIPPAGE_PER_WINDOW_BPS / 10_000) as u64;
+        v.charge_swap_slippage(budget, 0).unwrap();
+
+        // AUM drops to 40%: the resized bucket is fully spent, not over-full.
+        v.aum = PodU64::from(BASE * 2 / 5);
+        let small = ((BASE as u128 * 2 / 5) * MAX_SWAP_SLIPPAGE_PER_WINDOW_BPS / 10_000) as u64;
+        v.charge_swap_slippage(0, 0)
+            .expect("a zero-slippage swap must pass right after the shrink");
+        assert!(v.charge_swap_slippage(1, 0).is_err());
+        v.charge_swap_slippage(small / 2, SWAP_SLIPPAGE_WINDOW_SECONDS / 2)
+            .expect("capacity refills against the resized bucket");
+        v.charge_swap_slippage(
+            small,
+            SWAP_SLIPPAGE_WINDOW_SECONDS / 2 + SWAP_SLIPPAGE_WINDOW_SECONDS,
+        )
+        .expect("a full hour restores the whole resized bucket");
     }
 
     #[test]

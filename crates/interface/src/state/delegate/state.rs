@@ -98,10 +98,10 @@ pub enum Settlement {
         /// Allow the moved mint to have no `assets[]` row: skips valuation and
         /// `deployed` bookkeeping, so the value is carried only by the tracked
         /// position's opaque mark. A validator setting this MUST pin both
-        /// endpoints itself. This is restricted to authenticated in-flows such
-        /// as seized collateral returning from Offerbook; an unlisted out-flow
-        /// is `DisallowedAsset`, because it could otherwise round-trip arbitrary
-        /// custody into a sink claim.
+        /// endpoints itself. In-flows are restricted to authenticated ones such
+        /// as seized collateral returning from Offerbook. Nest's unlisted share
+        /// out-flow is bound to the configured OFT store + mint commitment and
+        /// its canonical custody ATA.
         allow_unlisted: bool,
     },
     /// A swap: `source_index` debited, `dest_index` credited. Nothing is added
@@ -192,6 +192,11 @@ pub enum Settlement {
         protocol: u8,
         /// Fluid `VaultConfig.borrow_fee`, in four-decimal basis points.
         borrow_fee_bps: u16,
+        /// Routed index of the protocol's receipt-token mint (an Earn fToken)
+        /// when the position mark values a custody ATA of it. The dispatcher
+        /// refuses the operation while that mint also has a sink or an asset
+        /// row: one accounting role per mint, or both marks price one balance.
+        receipt_mint_index: Option<usize>,
     },
 }
 
@@ -211,4 +216,30 @@ pub trait ProtocolCPI {
         data: &[u8],
         permissions: u64,
     ) -> Result<Option<Settlement>, ProgramError>;
+
+    /// Sender-side setup the protocol needs from the vault authority right
+    /// before the routed CPI, signed with `["authority", vault, bump]` — e.g.
+    /// CCIP's Router pulls the tokens with its own billing-signer PDA, so the
+    /// sender must first `approve` it for exactly the transferred amount. Runs
+    /// after `validate` and the pre-CPI gates; anything it does reverts with
+    /// the transaction if the CPI fails. Default: nothing.
+    fn before_invoke(
+        _accounts: &[AccountView],
+        _data: &[u8],
+        _vault: &Address,
+        _authority_bump: u8,
+    ) -> Result<(), ProgramError> {
+        Ok(())
+    }
+
+    /// Mirror of [`ProtocolCPI::before_invoke`], right after the routed CPI
+    /// (CCIP: `revoke` the delegate again). Default: nothing.
+    fn after_invoke(
+        _accounts: &[AccountView],
+        _data: &[u8],
+        _vault: &Address,
+        _authority_bump: u8,
+    ) -> Result<(), ProgramError> {
+        Ok(())
+    }
 }
