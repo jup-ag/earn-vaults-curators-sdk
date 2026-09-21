@@ -10,29 +10,34 @@ use {
     },
 };
 
-/// Curator-approved terms for new borrowing. The all-zero value disables new
-/// loans. Each adapter enforces its counterparty and standing-offer restrictions.
+/// Curator-approved terms for new loans on either side. The all-zero value
+/// disables new loans. The LTV and APY lines are read from the vault's side:
+/// borrowing must sit at or above `min_ltv_bps` and at or below `max_apy_bps`,
+/// lending at or below `min_ltv_bps` and at or above `max_apy_bps`. Each
+/// adapter enforces its counterparty and standing-offer restrictions.
 #[derive(SchemaRead, SchemaWrite, Clone, Copy, CodamaType)]
 #[wincode(assert_zero_copy)]
 #[repr(C)]
 pub struct LoanLimits {
-    /// Minimum principal proceeds / collateral oracle value, in basis points.
-    /// This floor is the whole economic protection: it caps a deliberate
-    /// default's loss at `(1 - min_ltv) x collateral`. There is deliberately no
-    /// maximum — borrowing *more* against the same collateral only ever favors
-    /// the vault, and leverage is already bounded by `max_deployed` and
-    /// `max_principal_value`.
+    /// The LTV line, principal / collateral oracle value in basis points. As
+    /// borrower this floor is the whole economic protection: it caps a
+    /// deliberate default's loss at `(1 - min_ltv) x collateral`. There is
+    /// deliberately no maximum — borrowing *more* against the same collateral
+    /// only ever favors the vault, and leverage is already bounded by
+    /// `max_deployed` and `max_principal_value`. As lender the same line is a
+    /// ceiling: a standing principal offer may not lend above it.
     #[codama(type = number(u16))]
     pub min_ltv_bps: PodU16,
-    /// Maximum nominal annual loan rate. Together with `max_duration_seconds`
-    /// it also bounds any interest-derived protocol fee deducted from proceeds.
+    /// The rate line, nominal annual bps. As borrower a maximum; together with
+    /// `max_duration_seconds` it also bounds any interest-derived protocol fee
+    /// deducted from proceeds. As lender a minimum.
     #[codama(type = number(u32))]
     pub max_apy_bps: PodU32,
     #[codama(type = number(u32))]
     pub min_duration_seconds: PodU32,
     #[codama(type = number(u32))]
     pub max_duration_seconds: PodU32,
-    /// Maximum lifetime of a new standing collateral offer.
+    /// Maximum lifetime of a new standing offer, either side.
     #[codama(type = number(u32))]
     pub max_offer_expiry_seconds: PodU32,
     /// Maximum principal oracle value per loan, in USD micro-units.
@@ -75,7 +80,9 @@ impl LoanLimits {
         if !self.enabled() {
             return Ok(());
         }
+        // A zero rate line would be no floor at all on the lending side.
         if self.min_ltv_bps.get() > 10_000
+            || self.max_apy_bps.is_zero()
             || self.min_duration_seconds.is_zero()
             || self.min_duration_seconds.get() > self.max_duration_seconds.get()
             || self.max_offer_expiry_seconds.is_zero()
@@ -101,7 +108,7 @@ mod tests {
         assert!(zero.validate().is_ok());
         let limits = LoanLimits {
             min_ltv_bps: 5_000.into(),
-            max_apy_bps: 0.into(),
+            max_apy_bps: 1.into(),
             min_duration_seconds: 60.into(),
             max_duration_seconds: 86_400.into(),
             max_offer_expiry_seconds: 300.into(),
@@ -113,6 +120,10 @@ mod tests {
         for invalid in [
             LoanLimits {
                 min_ltv_bps: 10_001.into(),
+                ..limits
+            },
+            LoanLimits {
+                max_apy_bps: 0.into(),
                 ..limits
             },
             LoanLimits {

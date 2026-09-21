@@ -42,7 +42,7 @@ impl GrantRevokeDelegate {
             program_id: crate::ID,
             accounts: vec![
                 AccountMeta::new(self.curator, true),
-                AccountMeta::new_readonly(self.vault, false),
+                AccountMeta::new(self.vault, false),
                 AccountMeta::new(delegate_pda, false),
                 AccountMeta::new_readonly(self.delegate, false),
                 AccountMeta::new_readonly(self.protocol_id, false),

@@ -20,6 +20,7 @@ use {
     earn_vaults_sdk::{
         ID as PROGRAM_ID,
         arguments::{PositionAdd, PositionInit},
+        constants::{CCIP_ROUTER_ID, CCTP_TOKEN_MESSENGER_MINTER_V2_ID, NEST_OFT_ID},
         instructions::{
             AcceptCurator, AssetAddFields, AssetUpdateFields, CancelPartialRedeem, CancelRedeem,
             ClaimFees, ClaimRedeem, CrystallizeFees, FulfillRedeem, GrantRevokeDelegate,
@@ -31,7 +32,7 @@ use {
             derive_associated_token_account, derive_share_mint, derive_vault,
             derive_vault_authority,
         },
-        state::{LoanLimits, Protocol},
+        state::{CcipLane, LoanLimits, NestRoute, Protocol},
         zeropod::pod::{PodOption, PodU16, PodU32},
     },
     serde::{Deserialize, Serialize},
@@ -106,8 +107,8 @@ enum Cmd {
     /// For an INF loop: `--base-mint <INF> --base-oracle <INF/USD>` (deposit),
     /// `--other-mint <wSOL> --other-oracle <SOL/USD>` (the debt asset, priced
     /// into AUM but not deposit-enabled), and
-    /// `--position 2:2:9:60:300:50` (slot 2, JupiterLend protocol, flags
-    /// ENABLED|REQUIRED_IN_AUM, 60s staleness, 3% drift, 0.5% haircut).
+    /// `--position 2:2:9:60:300` (slot 2, JupiterLend protocol, flags
+    /// ENABLED|REQUIRED_IN_AUM, 60s staleness, 3% drift).
     InitVault {
         #[arg(long)]
         curator: PathBuf,
@@ -137,7 +138,7 @@ enum Cmd {
         #[arg(long, requires_all = ["other_mint", "other_oracle"])]
         other_feed_id: Option<String>,
         /// Opaque position, repeatable.
-        /// `SLOT:PROTOCOL:FLAGS:STALENESS:DRIFT:HAIRCUT` (decimal). SLOT is the
+        /// `SLOT:PROTOCOL:FLAGS:STALENESS:DRIFT` (decimal). SLOT is the
         /// free index in `Vault.positions` (0..7). Protocol values: SpotTokens
         /// 0, Offerbook 1, JupiterLend 2 — at most one *enabled* slot each.
         /// Flag values: REQUIRED_IN_AUM 1, DEBT 4, ENABLED 8.
@@ -229,8 +230,9 @@ enum Cmd {
     UpdateVault {
         #[arg(long)]
         curator: PathBuf,
-        /// Borrowing policy: MIN_LTV:MAX_APY:MIN_SECONDS:MAX_SECONDS:EXPIRY_SECONDS:MAX_USD_MICRO:LENDER.
-        /// Rates are basis points; LENDER is an address or `any`. Use `disabled` to stop new loans.
+        /// Loan policy: MIN_LTV:MAX_APY:MIN_SECONDS:MAX_SECONDS:EXPIRY_SECONDS:MAX_USD_MICRO:LENDER.
+        /// Rates are basis points; LENDER is an address or `any`. Read from the vault's side: when it
+        /// lends, MIN_LTV is a ceiling and MAX_APY a floor. Use `disabled` to stop new loans.
         #[arg(long, value_name = "SPEC")]
         offerbook_limits: Option<String>,
         /// Seconds between Redeem and ClaimRedeem (<= MAX_TIMELOCK_DELAY).
@@ -274,7 +276,7 @@ enum Cmd {
         #[arg(long, requires = "add_asset_feed_id")]
         add_asset_deposit_enabled: bool,
         /// Onboard a NEW position into a free slot — same SPEC as init's
-        /// --position: SLOT:PROTOCOL:FLAGS:STALENESS:DRIFT:HAIRCUT.
+        /// --position: SLOT:PROTOCOL:FLAGS:STALENESS:DRIFT.
         #[arg(long, value_name = "SPEC")]
         add_position: Option<String>,
         /// Retire an emptied asset row (deposits disabled, deployed == 0,
@@ -324,11 +326,6 @@ enum Cmd {
         /// Vault.positions, 0..7).
         #[arg(long)]
         position_index: Option<u8>,
-        /// Discount `validate_aum` applies to this position's mark, in bps
-        /// (0 = believe the mark in full, 10000 = full write-off). Takes effect
-        /// at the next validate_aum, in full — nothing bounds the AUM step.
-        #[arg(long, value_name = "BPS", requires = "position_index")]
-        haircut_bps: Option<u16>,
         /// Unbrick a slot frozen at a zero/dust mark: back to never-priced, so
         /// the next price_opaque bootstraps. Clears PRICED | INITIALIZED and
         /// zeroes last_value. validate_aum skips it until it is re-marked.
@@ -361,6 +358,16 @@ enum Cmd {
         /// is still sellable; the slot frees itself once it is sold.
         #[arg(long, value_name = "N")]
         sink_release: Option<u8>,
+        /// CCIP lane a SEND delegate may bridge to: CHAIN_SELECTOR:RECEIVER,
+        /// RECEIVER a 0x-hex EVM address (left-padded to 32 bytes) or a base58
+        /// 32-byte key. `disabled` turns bridging off. One lane per vault.
+        #[arg(long, value_name = "SPEC")]
+        ccip_lane: Option<String>,
+        /// Nest route: COMPOSER:RELAYER:OFT_STORE:SHARE_MINT. The first two are
+        /// 0x-hex EVM addresses; the latter two are Solana addresses.
+        /// `disabled` turns Nest off. One route per vault.
+        #[arg(long, value_name = "SPEC")]
+        nest_route: Option<String>,
     },
     /// UpdateShareMeta: curator rewrites the share mint's Token-2022 metadata.
     /// Omitted fields are left untouched.
@@ -619,12 +626,12 @@ fn read_pubkeys(path: &PathBuf) -> Result<Vec<String>> {
     Ok(v)
 }
 
-/// Parse `SLOT:PROTOCOL:FLAGS:STALENESS:DRIFT:HAIRCUT`. SLOT is the free index
+/// Parse `SLOT:PROTOCOL:FLAGS:STALENESS:DRIFT`. SLOT is the free index
 /// in `Vault.positions`; PROTOCOL names the integration.
 fn parse_position(spec: &str) -> Result<(u8, PositionInit)> {
     let f: Vec<&str> = spec.split(':').collect();
-    if f.len() != 6 {
-        bail!("bad position spec {spec:?}: want SLOT:PROTOCOL:FLAGS:STALENESS:DRIFT:HAIRCUT");
+    if f.len() != 5 {
+        bail!("bad position spec {spec:?}: want SLOT:PROTOCOL:FLAGS:STALENESS:DRIFT");
     }
     // Parse each field straight into its on-wire width: a `u64` parse plus an
     // `as` narrowing would wrap an out-of-range SLOT/PROTOCOL/DRIFT into a
@@ -661,7 +668,6 @@ fn parse_position(spec: &str) -> Result<(u8, PositionInit)> {
             flags: n(&f, 2, "flags")?,
             max_staleness_seconds: opt::<u32, PodU32>(&f, 3, "staleness")?,
             max_drift_bps: opt::<u16, PodU16>(&f, 4, "drift")?,
-            haircut_bps: PodU16::from(n::<u16>(&f, 5, "haircut")?),
         },
     ))
 }
@@ -698,8 +704,77 @@ fn parse_offerbook_limits(spec: &str) -> Result<LoanLimits> {
             addr(lender)?
         },
     };
-    limits.validate().map_err(|_| anyhow!("invalid Offerbook limits: require 1 <= min LTV <= 10000, positive duration/expiry/principal cap, and max duration >= min duration"))?;
+    limits.validate().map_err(|_| anyhow!("invalid Offerbook limits: require 1 <= LTV line <= 10000, positive APY line/duration/expiry/principal cap, and max duration >= min duration"))?;
     Ok(limits)
+}
+
+fn parse_ccip_lane(spec: &str) -> Result<CcipLane> {
+    if spec == "disabled" {
+        return Ok(CcipLane::zero());
+    }
+    let (selector, receiver) = spec
+        .split_once(':')
+        .ok_or_else(|| anyhow!("want CHAIN_SELECTOR:RECEIVER or disabled"))?;
+    let receiver = match receiver.strip_prefix("0x") {
+        Some(hex) => {
+            let bytes = (0..hex.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(hex.get(i..i + 2).unwrap_or("!"), 16))
+                .collect::<Result<Vec<u8>, _>>()
+                .context("receiver hex")?;
+            if bytes.is_empty() || bytes.len() > 32 {
+                bail!("receiver must be 1..=32 bytes of hex");
+            }
+            let mut padded = [0u8; 32];
+            padded[32 - bytes.len()..].copy_from_slice(&bytes);
+            Address::new_from_array(padded)
+        }
+        None => addr(receiver)?,
+    };
+    let lane = CcipLane {
+        dest_chain_selector: selector.parse::<u64>().context("chain selector")?.into(),
+        receiver,
+    };
+    lane.validate()
+        .map_err(|_| anyhow!("invalid CCIP lane: a nonzero selector needs a nonzero receiver"))?;
+    Ok(lane)
+}
+
+fn parse_nest_route(spec: &str) -> Result<NestRoute> {
+    if spec == "disabled" {
+        return Ok(NestRoute::zero());
+    }
+    let mut fields = spec.split(':');
+    let (composer, relayer, oft_store, share_mint) = match (
+        fields.next(),
+        fields.next(),
+        fields.next(),
+        fields.next(),
+        fields.next(),
+    ) {
+        (Some(a), Some(b), Some(c), Some(d), None) => (a, b, c, d),
+        _ => bail!("want COMPOSER:RELAYER:OFT_STORE:SHARE_MINT or disabled"),
+    };
+    let evm = |s: &str| -> Result<[u8; 20]> {
+        let hex = s.strip_prefix("0x").unwrap_or(s);
+        if hex.len() != 40 {
+            bail!("{s}: want a 20-byte 0x-hex EVM address");
+        }
+        let mut out = [0u8; 20];
+        for (i, b) in out.iter_mut().enumerate() {
+            *b = u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).context("EVM address hex")?;
+        }
+        Ok(out)
+    };
+    let route = NestRoute {
+        composer: evm(composer)?,
+        relayer: evm(relayer)?,
+        oft_commitment: NestRoute::commitment(&addr(oft_store)?, &addr(share_mint)?),
+    };
+    route
+        .validate()
+        .map_err(|_| anyhow!("invalid Nest route"))?;
+    Ok(route)
 }
 
 fn load_state(path: &PathBuf) -> Result<State> {
@@ -894,7 +969,6 @@ fn run_init_vault(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
                 flags: 0,
                 max_staleness_seconds: PodOption::none(),
                 max_drift_bps: PodOption::none(),
-                haircut_bps: PodU16::from(0),
             };
             let mut arr = vec![zero; max_slot + 1];
             for (slot, p) in parsed {
@@ -994,10 +1068,12 @@ fn run_grant_delegate(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
     let curator_kp = load_kp(&curator)?;
     // `self` → the vault program id, which is how system-scoped perms
     // (PRICE/FULFILL/PAUSE) key their delegate PDA.
-    let protocol_id = if protocol == "self" {
-        PROGRAM_ID
-    } else {
-        addr(&protocol)?
+    let protocol_id = match protocol.as_str() {
+        "self" => PROGRAM_ID,
+        "ccip" => CCIP_ROUTER_ID,
+        "nest-cctp" => CCTP_TOKEN_MESSENGER_MINTER_V2_ID,
+        "nest-oft" => NEST_OFT_ID,
+        other => addr(other)?,
     };
     let ix = GrantRevokeDelegate {
         curator: curator_kp.pubkey(),
@@ -1233,7 +1309,6 @@ fn run_update_vault(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
         asset_deposit_enabled,
         asset_report_decimals,
         position_index,
-        haircut_bps,
         position_reset,
         max_flash_liability,
         sink_haircut_bps,
@@ -1241,6 +1316,8 @@ fn run_update_vault(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
         sink_bootstrap_cap_bps,
         sink_capacity,
         sink_release,
+        ccip_lane,
+        nest_route,
     } = command
     else {
         unreachable!("dispatch passed the wrong command to run_update_vault")
@@ -1278,7 +1355,6 @@ fn run_update_vault(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
             flags: p.flags,
             max_staleness_seconds: p.max_staleness_seconds,
             max_drift_bps: p.max_drift_bps,
-            haircut_bps: p.haircut_bps,
         });
     let remove_asset = match (remove_asset_index, &remove_asset_mint) {
         (Some(index), Some(mint)) => {
@@ -1293,10 +1369,20 @@ fn run_update_vault(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
         _ => None,
     };
     let ix = UpdateVault {
-        offerbook_limits: offerbook_limits
-            .as_deref()
-            .map(parse_offerbook_limits)
-            .transpose()?,
+        policy: match (
+            offerbook_limits.as_deref(),
+            ccip_lane.as_deref(),
+            nest_route.as_deref(),
+        ) {
+            (Some(spec), None, None) => Some(parse_offerbook_limits(spec)?.into()),
+            (None, Some(spec), None) => Some(parse_ccip_lane(spec)?.into()),
+            (None, None, Some(spec)) => Some(parse_nest_route(spec)?.into()),
+            (None, None, None) => None,
+            _ => bail!(
+                "--offerbook-limits, --ccip-lane and --nest-route set one policy each; send \
+                 one call per policy"
+            ),
+        },
         add_asset,
         add_position,
         remove_asset,
@@ -1326,7 +1412,6 @@ fn run_update_vault(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
         }),
         position_update: position_index.map(|index| PositionUpdateFields {
             index,
-            haircut_bps,
             reset: position_reset.then_some(true),
             ..Default::default()
         }),
@@ -1776,26 +1861,25 @@ mod tests {
     /// wrapping it into a different, valid-looking one.
     #[test]
     fn position_spec_rejects_out_of_range_fields() {
-        let ok = "0:0:9:86400:200:0";
+        let ok = "0:0:9:86400:200";
         let (slot, p) = parse_position(ok).unwrap();
         assert_eq!((slot, p.protocol, p.flags), (0, 0, 9));
         assert_eq!(p.max_drift_bps.get().map(u16::from), Some(200));
 
         // Empty window fields ask for the program's default; `0` for the
         // loosest setting. The two must not collapse into the same wire value.
-        let (_, d) = parse_position("0:0:9:::0").unwrap();
+        let (_, d) = parse_position("0:0:9::").unwrap();
         assert_eq!(d.max_staleness_seconds.get(), None);
         assert_eq!(d.max_drift_bps.get(), None);
-        let (_, w) = parse_position("0:0:9:0:0:0").unwrap();
+        let (_, w) = parse_position("0:0:9:0:0").unwrap();
         assert_eq!(w.max_staleness_seconds.get().map(u32::from), Some(0));
         assert_eq!(w.max_drift_bps.get().map(u16::from), Some(0));
 
         for (spec, what) in [
-            ("256:0:9:86400:200:0", "slot"),
-            ("0:256:9:86400:200:0", "protocol"),
-            ("0:0:256:86400:200:0", "flags"),
-            ("0:0:9:86400:65536:0", "drift"),
-            ("0:0:9:86400:200:65536", "haircut"),
+            ("256:0:9:86400:200", "slot"),
+            ("0:256:9:86400:200", "protocol"),
+            ("0:0:256:86400:200", "flags"),
+            ("0:0:9:86400:65536", "drift"),
         ] {
             let err = match parse_position(spec) {
                 Err(e) => e.to_string(),
@@ -1994,14 +2078,6 @@ mod tests {
                 "update-vault",
                 "--curator",
                 "curator.json",
-                "--haircut-bps",
-                "1",
-            ],
-            &[
-                "vault",
-                "update-vault",
-                "--curator",
-                "curator.json",
                 "--position-reset",
             ],
             &[
@@ -2050,8 +2126,6 @@ mod tests {
             "100",
             "--position-index",
             "3",
-            "--haircut-bps",
-            "25",
             "--position-reset",
             "--add-asset-mint",
             "new-mint",
@@ -2074,7 +2148,6 @@ mod tests {
             asset_index,
             max_deposit,
             position_index,
-            haircut_bps,
             position_reset,
             add_asset_mint,
             add_asset_feed_id,
@@ -2092,7 +2165,6 @@ mod tests {
         assert_eq!(asset_index, Some(2));
         assert_eq!(max_deposit, Some(100));
         assert_eq!(position_index, Some(3));
-        assert_eq!(haircut_bps, Some(25));
         assert!(position_reset);
         assert_eq!(add_asset_mint.as_deref(), Some("new-mint"));
         assert_eq!(add_asset_feed_id.as_deref(), Some("new-feed"));

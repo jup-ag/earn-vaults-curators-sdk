@@ -9,7 +9,7 @@ use {
         arguments::{AssetInit, InitializeVaultArgs, PositionInit},
         constants::EVENT_PDA,
         state::{ASSET_FLAG_CHAINLINK, MAX_ALLOWED_ASSETS, MAX_POSITIONS},
-        zeropod::pod::{PodOption, PodU16, PodU64},
+        zeropod::pod::{PodOption, PodU64},
     },
     solana_address::Address,
     solana_instruction::{AccountMeta, Instruction},
@@ -160,7 +160,6 @@ impl InitializeVault<'_> {
             flags: 0,
             max_staleness_seconds: PodOption::none(),
             max_drift_bps: PodOption::none(),
-            haircut_bps: PodU16::from(0),
         };
         let mut positions = [zero; MAX_POSITIONS as usize];
         if self.positions.len() > MAX_POSITIONS as usize {
@@ -249,7 +248,6 @@ mod tests {
                 flags: 9,
                 max_staleness_seconds: PodOption::none(),
                 max_drift_bps: PodOption::none(),
-                haircut_bps: PodU16::from(50),
             }],
             timelock_delay: Some(0),
             management_fee_bps: 100,
@@ -287,7 +285,6 @@ mod tests {
         assert_eq!(assets[1].report_decimals, 18);
         assert_eq!(positions[0].protocol, 2);
         assert_eq!(positions[0].flags, 9);
-        assert_eq!(positions[0].haircut_bps.get(), 50);
         assert_eq!(positions[1].flags, 0);
     }
 

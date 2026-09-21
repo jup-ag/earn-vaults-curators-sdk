@@ -4,7 +4,7 @@ use {
         VaultInstruction,
         arguments::{AssetAdd, AssetUpdate, PositionAdd, PositionUpdate, UpdateVaultArgs},
         constants::EVENT_PDA,
-        state::{ASSET_FLAG_CHAINLINK, ASSET_FLAG_DEPOSIT_ENABLED, LoanLimits},
+        state::{ASSET_FLAG_CHAINLINK, ASSET_FLAG_DEPOSIT_ENABLED, ProtocolPolicy},
         zeropod::pod::PodOption,
     },
     solana_address::Address,
@@ -33,8 +33,10 @@ use {
 /// - `sink_*`: seized-collateral capacity, pricing, and release controls.
 #[derive(Default)]
 pub struct UpdateVault {
-    /// Replace borrowing limits; `Some(zero)` disables new Offerbook loans.
-    pub offerbook_limits: Option<LoanLimits>,
+    /// One protocol's curator policy, e.g. `Some(loan_limits.into())`,
+    /// `Some(ccip_lane.into())` or `Some(nest_route.into())`; an all-zero
+    /// payload disables that protocol.
+    pub policy: Option<ProtocolPolicy>,
     pub curator: Address,
     pub vault: Address,
     pub paused: Option<u8>,
@@ -142,7 +144,6 @@ pub struct PositionUpdateFields {
     pub index: u8,
     pub max_staleness_seconds: Option<u64>,
     pub max_drift_bps: Option<u16>,
-    pub haircut_bps: Option<u16>,
     pub reset: Option<bool>,
 }
 
@@ -171,7 +172,6 @@ impl PositionUpdateFields {
             index: self.index,
             max_staleness_seconds: pod_opt(self.max_staleness_seconds),
             max_drift_bps: pod_opt(self.max_drift_bps),
-            haircut_bps: pod_opt(self.haircut_bps),
             reset: pod_opt(self.reset.map(u8::from)),
         }
     }
@@ -199,7 +199,7 @@ impl AssetAddFields {
 impl UpdateVault {
     fn arguments(&self) -> UpdateVaultArgs {
         UpdateVaultArgs {
-            offerbook_limits: pod_opt(self.offerbook_limits),
+            policy: pod_opt(self.policy),
             paused: pod_opt(self.paused),
             timelock_delay: pod_opt(self.timelock_delay),
             pending_curator: pod_opt(self.pending_curator),
@@ -298,7 +298,6 @@ mod tests {
                 index: 3,
                 max_staleness_seconds: Some(60),
                 max_drift_bps: Some(200),
-                haircut_bps: Some(25),
                 reset: Some(true),
             }),
             max_flash_liability: Some(10_000),

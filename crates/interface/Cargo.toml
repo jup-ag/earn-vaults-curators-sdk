@@ -20,6 +20,7 @@ solana-account-view.workspace = true
 solana-address = { workspace = true, features = ["wincode", "decode"] }
 solana-instruction-view = { workspace = true, features = ["cpi"] }
 solana-program-error.workspace = true
+solana-sha256-hasher.workspace = true
 wincode = { workspace = true, features = ["derive"] }
 zeropod = { workspace = true, features = ["wincode"] }
 

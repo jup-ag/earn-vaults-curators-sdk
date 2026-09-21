@@ -43,9 +43,6 @@ pub struct PositionConfig {
     /// Optional per-position drift override. `0` means global default.
     #[codama(type = number(u16))]
     pub max_drift_bps: PodU16,
-    /// Optional haircut for stale/defaulted/illiquid marks. `0` means none.
-    #[codama(type = number(u16))]
-    pub haircut_bps: PodU16,
     #[codama(type = number(u64))]
     pub last_value: PodU64,
     #[codama(type = number(i64))]
@@ -60,7 +57,6 @@ impl PositionConfig {
             flags: 0,
             max_staleness_seconds: PodU64::ZERO,
             max_drift_bps: PodU16::ZERO,
-            haircut_bps: PodU16::ZERO,
             last_value: PodU64::ZERO,
             last_priced_at: PodI64::ZERO,
         }

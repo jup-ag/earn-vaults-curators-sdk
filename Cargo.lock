@@ -517,6 +517,7 @@ dependencies = [
  "solana-address",
  "solana-instruction-view",
  "solana-program-error",
+ "solana-sha256-hasher",
  "wincode",
  "zeropod",
 ]
@@ -1858,8 +1859,9 @@ checksum = "e13c156562582aa81c60cb29407084cdb54c4164760106ab78e6c5b0858cf64e"
 
 [[package]]
 name = "zeropod"
-version = "0.3.3"
-source = "git+https://github.com/blueshift-gg/zeropod.git?rev=b352026626173ef2106ddb86199f50bb3fc009ea#b352026626173ef2106ddb86199f50bb3fc009ea"
+version = "0.3.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "af6c4fe8dc57179de72db5185c9c618a3350a9122a76ec3e13ccd493bca38931"
 dependencies = [
  "solana-address",
  "wincode",
@@ -1868,8 +1870,9 @@ dependencies = [
 
 [[package]]
 name = "zeropod-derive"
-version = "0.3.3"
-source = "git+https://github.com/blueshift-gg/zeropod.git?rev=b352026626173ef2106ddb86199f50bb3fc009ea#b352026626173ef2106ddb86199f50bb3fc009ea"
+version = "0.3.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "babb94e405e4914176ad9fd74e34c640ea0fcd314bfcb2bb6690a5300e724257"
 dependencies = [
  "proc-macro2",
  "quote",
