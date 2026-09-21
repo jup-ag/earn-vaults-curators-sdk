@@ -126,6 +126,9 @@ pub struct AssetUpdateFields {
     pub max_staleness_seconds: Option<i64>,
     pub max_confidence_bps: Option<u16>,
     pub max_deployed: Option<u64>,
+    /// Restate the row's `deployed` counter after custody came back outside a
+    /// routed settlement (e.g. a CCIP OffRamp delivery).
+    pub deployed: Option<u64>,
     pub max_deposit: Option<u64>,
     /// Toggle deposits for this asset; a hand-priced row may not be
     /// deposit-enabled. The lowest-index enabled row is canonical for instant
@@ -160,6 +163,7 @@ impl AssetUpdateFields {
             max_staleness_seconds: pod_opt(self.max_staleness_seconds),
             max_confidence_bps: pod_opt(self.max_confidence_bps),
             max_deployed: pod_opt(self.max_deployed),
+            deployed: pod_opt(self.deployed),
             max_deposit: pod_opt(self.max_deposit),
             deposit_enabled: pod_opt(self.deposit_enabled.map(u8::from)),
         }
@@ -291,6 +295,7 @@ mod tests {
                 max_staleness_seconds: Some(300),
                 max_confidence_bps: Some(50),
                 max_deployed: Some(1_000),
+                deployed: Some(500),
                 max_deposit: Some(2_000),
                 deposit_enabled: Some(false),
             }),
@@ -343,6 +348,7 @@ mod tests {
             Some(300)
         );
         assert_eq!(asset.deposit_enabled.get(), Some(0));
+        assert_eq!(asset.deployed.get().map(|value| value.get()), Some(500));
         assert_eq!(position.index, 3);
         assert_eq!(position.reset.get(), Some(1));
         assert_eq!(

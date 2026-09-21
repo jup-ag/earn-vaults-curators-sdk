@@ -43,6 +43,13 @@ pub struct AssetUpdate {
     /// Per-asset strategy-outflow ceiling; `0` = unlimited.
     #[codama(type = option(number(u64, le), fixed))]
     pub max_deployed: PodOption<PodU64>,
+    /// Restate the row's `deployed` counter outright (raw token units). Only
+    /// routed settlements move it, so custody that returns outside the program
+    /// — a CCIP OffRamp delivery into the custody ATA — leaves it overstated
+    /// until the curator corrects it here. Telemetry and the `max_deployed`
+    /// basis, never AUM.
+    #[codama(type = option(number(u64, le), fixed))]
+    pub deployed: PodOption<PodU64>,
     /// Per-asset deposit capacity ceiling; `0` = unlimited.
     #[codama(type = option(number(u64, le), fixed))]
     pub max_deposit: PodOption<PodU64>,
@@ -63,6 +70,7 @@ impl ZcValidate for AssetUpdate {
         PodOption::validate_ref(&value.max_staleness_seconds)?;
         PodOption::validate_ref(&value.max_confidence_bps)?;
         PodOption::validate_ref(&value.max_deployed)?;
+        PodOption::validate_ref(&value.deployed)?;
         PodOption::validate_ref(&value.max_deposit)?;
         PodOption::validate_ref(&value.deposit_enabled)
     }

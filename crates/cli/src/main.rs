@@ -307,6 +307,14 @@ enum Cmd {
         /// asset's `deployed` above CAP (raw token units, 0 = unlimited).
         #[arg(long, value_name = "CAP", requires = "asset_index")]
         max_deployed: Option<u64>,
+        /// Restate this asset's `deployed` counter (raw token units). Routed
+        /// CPIs are the only thing that moves it, so custody that comes back
+        /// outside the program — a CCIP OffRamp delivery — leaves it high until
+        /// you correct it here. Pair with `--position-index N --position-reset`
+        /// (full return) or a curator `price-opaque` (partial) so AUM stops
+        /// counting the bridged value twice.
+        #[arg(long, value_name = "AMOUNT", requires = "asset_index")]
+        asset_deployed: Option<u64>,
         /// How stale this asset's cached reading may be, in seconds (0 = the
         /// 60s default, max 7 days). Size it to the feed: a daily-published
         /// RWA NAV can't clear a window built for Pyth. Every site that values
@@ -1305,6 +1313,7 @@ fn run_update_vault(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
         asset_index,
         max_deposit,
         max_deployed,
+        asset_deployed,
         asset_max_staleness,
         asset_deposit_enabled,
         asset_report_decimals,
@@ -1407,6 +1416,7 @@ fn run_update_vault(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
             max_staleness_seconds: asset_max_staleness,
             deposit_enabled: asset_deposit_enabled,
             max_deployed,
+            deployed: asset_deployed,
             max_deposit,
             ..Default::default()
         }),
@@ -2078,6 +2088,14 @@ mod tests {
                 "update-vault",
                 "--curator",
                 "curator.json",
+                "--asset-deployed",
+                "0",
+            ],
+            &[
+                "vault",
+                "update-vault",
+                "--curator",
+                "curator.json",
                 "--position-reset",
             ],
             &[
@@ -2124,6 +2142,8 @@ mod tests {
             "2",
             "--max-deposit",
             "100",
+            "--asset-deployed",
+            "0",
             "--position-index",
             "3",
             "--position-reset",
@@ -2147,6 +2167,7 @@ mod tests {
         let Cmd::UpdateVault {
             asset_index,
             max_deposit,
+            asset_deployed,
             position_index,
             position_reset,
             add_asset_mint,
@@ -2164,6 +2185,7 @@ mod tests {
         };
         assert_eq!(asset_index, Some(2));
         assert_eq!(max_deposit, Some(100));
+        assert_eq!(asset_deployed, Some(0));
         assert_eq!(position_index, Some(3));
         assert!(position_reset);
         assert_eq!(add_asset_mint.as_deref(), Some("new-mint"));

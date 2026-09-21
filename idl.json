@@ -3714,6 +3714,24 @@
             },
             {
               "kind": "structFieldTypeNode",
+              "name": "deployed",
+              "type": {
+                "kind": "optionTypeNode",
+                "fixed": true,
+                "item": {
+                  "kind": "numberTypeNode",
+                  "format": "u64",
+                  "endian": "le"
+                },
+                "prefix": {
+                  "kind": "numberTypeNode",
+                  "format": "u8",
+                  "endian": "le"
+                }
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
               "name": "maxDeposit",
               "type": {
                 "kind": "optionTypeNode",
