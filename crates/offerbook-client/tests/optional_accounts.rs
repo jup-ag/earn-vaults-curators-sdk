@@ -1,4 +1,4 @@
-use offerbook_client::{instructions::ClaimNonFungibleLoanAccounts, solana_address::Address, ID};
+use offerbook_client::{ID, instructions::ClaimNonFungibleLoanAccounts, solana_address::Address};
 
 #[test]
 fn missing_optional_account_is_readonly_and_present_account_keeps_flags() {

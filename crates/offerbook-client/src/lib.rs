@@ -18,9 +18,9 @@ pub use solana_instruction;
 pub use wincode;
 
 pub mod prelude {
+    pub use crate::ID;
     pub use crate::instructions::*;
     pub use crate::state::*;
-    pub use crate::ID;
 }
 
 use solana_address::Address;

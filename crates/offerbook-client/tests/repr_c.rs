@@ -1,7 +1,6 @@
 use offerbook_client::{
-    deserialize_exact, serialize,
+    BorshConfig, deserialize_exact, serialize,
     state::{Asset, Offer},
-    BorshConfig,
 };
 use wincode::{SchemaRead, SchemaWrite, TypeMeta};
 

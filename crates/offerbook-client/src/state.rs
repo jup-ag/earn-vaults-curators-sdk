@@ -189,7 +189,7 @@ unsafe impl<'de, C: wincode::config::Config> SchemaRead<'de, C> for Asset {
             _ => {
                 return Err(wincode::error::ReadError::Custom(
                     "repr(C) enum payload exceeds fixed size",
-                ))
+                ));
             }
         };
         let value = match tag {
@@ -390,7 +390,7 @@ unsafe impl<'de, C: wincode::config::Config> SchemaRead<'de, C> for AssetFilter 
             _ => {
                 return Err(wincode::error::ReadError::Custom(
                     "repr(C) enum payload exceeds fixed size",
-                ))
+                ));
             }
         };
         let value = match tag {
