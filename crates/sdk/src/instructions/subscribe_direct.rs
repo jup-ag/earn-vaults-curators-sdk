@@ -11,6 +11,8 @@ use {
 /// Un-queued deposit: transfers base into the vault and mints shares straight
 /// to the user in one transaction. Reverts if the vault has supply but its AUM
 /// snapshot is stale (`StalePrice`) — fall back to [`crate::Subscribe`] then.
+/// `min_shares_out` is the least number of share base units the user accepts;
+/// fewer shares reverts with `SubscribeOutputBelowMinimum`. `0` disables the bound.
 ///
 /// `base_mint` must be the vault's canonical base asset (the first configured,
 /// deposit-enabled row). Later deposit-enabled rows use the queued path. The
@@ -30,6 +32,7 @@ pub struct SubscribeDirect {
     pub user_share_account: Address,
     pub base_token_program: Address,
     pub amount: u64,
+    pub min_shares_out: u64,
 }
 
 impl SubscribeDirect {
@@ -38,7 +41,11 @@ impl SubscribeDirect {
         let vault_authority = derive_vault_authority(&self.vault);
 
         let amount = PodU64::from(self.amount);
-        let data = super::encode(&VaultInstruction::SubscribeDirect { amount: &amount });
+        let min_shares_out = PodU64::from(self.min_shares_out);
+        let data = super::encode(&VaultInstruction::SubscribeDirect {
+            amount: &amount,
+            min_shares_out: &min_shares_out,
+        });
 
         Instruction {
             program_id: crate::ID,

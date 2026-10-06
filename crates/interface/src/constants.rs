@@ -9,7 +9,10 @@ pub const SEED_EVENT_AUTHORITY: &[u8] = b"__event_authority";
 pub const EVENT_PDA: (Address, u8) =
     find_program_address_const(&[SEED_EVENT_AUTHORITY], &crate::ID);
 
-pub const MAX_ACTION_ACCOUNTS: usize = 54;
+/// Maximum forwarded account entries per protocol CPI (excluding Yield's four
+/// routing accounts). Fluid `operate` uses 35 fixed slots, leaving 20 remaining
+/// accounts; see README.md, "Fluid routed account limit (I-04)".
+pub const MAX_ACTION_ACCOUNTS: usize = 55;
 
 /// Protocol's annual management fee on vault AUM, in bps. This is additive to
 /// the per-vault curator management fee in
@@ -32,6 +35,11 @@ pub const MAX_PERFORMANCE_FEE_BPS: u16 = 5_000;
 
 const _: () =
     assert!(MAX_PERFORMANCE_FEE_BPS as u32 + PROTOCOL_PERFORMANCE_FEE_BPS as u32 <= 10_000);
+
+/// Authorized claimant for the protocol's crystallized-fee share PDA.
+/// ⚠️ Dev placeholder — replace with the treasury multisig before deployment.
+pub const PROTOCOL_TREASURY: Address =
+    Address::from_str_const("GTmMKk9qdVzAsxrnLeXSgsAjf7UbWJph7TqfYZFnA6k6");
 
 /// Max age of `Vault.last_priced_at` when `fulfill` reads `Vault.aum`;
 /// `validate_aum` holds each priced slot to the same bound.

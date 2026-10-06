@@ -55,6 +55,12 @@ pub enum VaultError {
     NestRouteMismatch,
     /// The temporary Nest redeem handoff is not followed by the exact OFT send it authorized.
     NestRedeemSequenceInvalid,
+    /// The redeem payout is below the caller's `min_out`.
+    RedeemOutputBelowMinimum,
+    /// The deposit mints fewer shares than the caller's `min_shares_out`.
+    SubscribeOutputBelowMinimum,
+    /// A queued redeem must settle in the user's requested token.
+    RedeemPayoutMintMismatch,
 }
 
 impl From<VaultError> for ProgramError {
@@ -190,6 +196,9 @@ impl ToStr for VaultError {
                 "prepare_nest_redeem must be top-level and immediately followed by the exact \
                  curator-pinned Nest OFT send"
             }
+            Self::RedeemOutputBelowMinimum => "Redeem payout is below the caller's minimum",
+            Self::SubscribeOutputBelowMinimum => "Deposit shares are below the caller's minimum",
+            Self::RedeemPayoutMintMismatch => "Redeem payout mint differs from the user's request",
         }
     }
 }

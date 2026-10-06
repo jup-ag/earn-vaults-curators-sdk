@@ -50,7 +50,8 @@ impl Delegate {
 }
 
 /// Which way the vault's token account moves during a routed CPI. `Out` =
-/// funds leave (deployed↑); `In` = funds return (deployed↓).
+/// funds leave; `In` = funds arrive. Direction alone does not prove a deployment
+/// was returned.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Flow {
     Out,
@@ -75,6 +76,9 @@ pub enum DebtLeg {
 /// validator means no vault-held balance moves (e.g. create/cancel offer).
 /// Indices are into the forwarded account list.
 pub enum Settlement {
+    /// Custody movement against an external position. Listed outflows charge
+    /// `deployed`; inflows preserve it because escrow receipt does not identify
+    /// which recorded deployment was returned. AUM folds independently below.
     Deployed {
         ta_index: usize,
         /// Mint account already present in the authenticated protocol CPI

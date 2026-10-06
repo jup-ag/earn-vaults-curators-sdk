@@ -663,9 +663,10 @@ impl Vault {
 
     #[inline(always)]
     pub fn eff_aum(&self, share_supply: u64, now: i64) -> u64 {
-        self.aum
-            .get()
-            .saturating_sub(self.raw_fee_liability(share_supply, now))
+        self.aum.get().saturating_sub(
+            self.raw_fee_liability(share_supply, now)
+                .min(self.fee_payable_cap()),
+        )
     }
 }
 
@@ -1302,6 +1303,33 @@ mod tests {
         assert_eq!(v.accrued_fee_assets(now), 0);
         assert!(v.perf_fee_accrued.is_zero());
         assert_eq!(v.raw_fee_liability(SUPPLY, now), 0);
+    }
+
+    #[test]
+    fn share_quotes_apply_the_fee_cap_before_reconciliation() {
+        const AUM: u64 = 30 * UNIT;
+        const SUPPLY: u64 = 125 * UNIT / 10;
+        const DEPOSIT: u64 = 30 * UNIT;
+
+        let mut v = vault(AUM);
+        v.perf_fee_accrued = PodU64::from(20 * UNIT);
+        assert!(v.raw_fee_liability(SUPPLY, 0) > v.fee_payable_cap());
+
+        let quoted_aum = v.eff_aum(SUPPLY, 0);
+        assert_eq!(quoted_aum, AUM / 2);
+        let deposit_quote = shares_for_deposit(DEPOSIT, SUPPLY, quoted_aum).unwrap();
+        let redeem_quote = assets_for_redeem(SUPPLY, SUPPLY, quoted_aum).unwrap();
+
+        v.accrue_fees(SUPPLY, 0);
+        assert_eq!(quoted_aum, v.eff_aum(SUPPLY, 0));
+        assert_eq!(
+            deposit_quote,
+            shares_for_deposit(DEPOSIT, SUPPLY, v.eff_aum(SUPPLY, 0)).unwrap()
+        );
+        assert_eq!(
+            redeem_quote,
+            assets_for_redeem(SUPPLY, SUPPLY, v.eff_aum(SUPPLY, 0)).unwrap()
+        );
     }
 
     #[test]

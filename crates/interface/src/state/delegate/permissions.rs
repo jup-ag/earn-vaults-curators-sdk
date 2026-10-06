@@ -12,7 +12,8 @@ pub mod offerbook {
     pub const BORROW: u64 = 1 << 3;
     /// Repay a borrowed loan to release its collateral.
     pub const REPAY: u64 = 1 << 4;
-    /// Create a collateral offer within curator loan limits, and cancel offers.
+    /// Cancel offers. Creating a standing collateral offer is refused (H-03):
+    /// its fill never passes through the vault, so it cannot be priced.
     pub const COLLATERAL_OFFER: u64 = 1 << 5;
 }
 

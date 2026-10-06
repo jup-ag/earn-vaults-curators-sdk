@@ -8,6 +8,9 @@ use {
     solana_instruction::{AccountMeta, Instruction},
 };
 
+/// Queue a deposit with a user-signed minimum share output. The minimum is
+/// persisted in a `Escrow` and checked by `Fulfill`; zero opts out.
+/// A request that cannot meet its minimum can be cancelled for a refund.
 pub struct Subscribe {
     pub user: Address,
     pub user_token_account: Address,
@@ -16,6 +19,8 @@ pub struct Subscribe {
     pub token_program: Address,
     pub amount: u64,
     pub nonce: u64,
+    /// Minimum raw share units to mint at fulfillment, not at enqueue time.
+    pub min_shares_out: u64,
 }
 
 impl Subscribe {
@@ -25,9 +30,11 @@ impl Subscribe {
 
         let amount = PodU64::from(self.amount);
         let nonce = PodU64::from(self.nonce);
+        let min_shares_out = PodU64::from(self.min_shares_out);
         let data = super::encode(&VaultInstruction::Subscribe {
             amount: &amount,
             nonce: &nonce,
+            min_shares_out: &min_shares_out,
         });
 
         Instruction {
