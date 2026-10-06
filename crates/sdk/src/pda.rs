@@ -9,8 +9,9 @@ use {
         seeds::{
             AuthoritySeeds, CuratorFeeAccountSeeds, DelegateSeeds, EscrowSeeds,
             EscrowShareAccountSeeds, EscrowTokenAccountSeeds, ExtraAccountMetasSeeds, PolicySeeds,
-            ProtocolFeeAccountSeeds, ShareMintSeeds, VaultSeeds,
+            ProtocolFeeAccountSeeds, ProtocolPolicySeeds, ShareMintSeeds, VaultSeeds,
         },
+        state::Protocol,
     },
     solana_address::Address,
 };
@@ -99,6 +100,33 @@ pub fn derive_protocol_fee_account(vault: &Address) -> Address {
 /// can't be used as Anchor `init`'s payer).
 pub fn derive_vault_authority(vault: &Address) -> Address {
     Address::find_program_address(&AuthoritySeeds { vault }.as_seeds(), &crate::ID).0
+}
+
+/// `["protocol_policy", vault, protocol, key]` — one curator policy for a routed protocol
+/// (Offerbook: key = collateral mint).
+/// A routed call's protocol-wide policy account (key = the zero address),
+/// read-only, as the dispatcher expects it right after the CPI's accounts.
+pub fn protocol_policy_meta(
+    vault: &Address,
+    protocol: Protocol,
+) -> solana_instruction::AccountMeta {
+    solana_instruction::AccountMeta::new_readonly(
+        derive_protocol_policy(vault, protocol, &Address::default()),
+        false,
+    )
+}
+
+pub fn derive_protocol_policy(vault: &Address, protocol: Protocol, key: &Address) -> Address {
+    Address::find_program_address(
+        &ProtocolPolicySeeds {
+            vault,
+            protocol: &[protocol as u8],
+            key,
+        }
+        .as_seeds(),
+        &crate::ID,
+    )
+    .0
 }
 
 /// `["delegate", vault, signer, protocol_program]` — Delegate PDA, scoped to

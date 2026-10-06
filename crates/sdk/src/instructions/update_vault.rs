@@ -4,7 +4,7 @@ use {
         VaultInstruction,
         arguments::{AssetAdd, AssetUpdate, PositionAdd, PositionUpdate, UpdateVaultArgs},
         constants::EVENT_PDA,
-        state::{ASSET_FLAG_CHAINLINK, ASSET_FLAG_DEPOSIT_ENABLED, ProtocolPolicy},
+        state::{ASSET_FLAG_CHAINLINK, ASSET_FLAG_DEPOSIT_ENABLED},
         zeropod::pod::PodOption,
     },
     solana_address::Address,
@@ -33,10 +33,6 @@ use {
 /// - `sink_*`: seized-collateral capacity, pricing, and release controls.
 #[derive(Default)]
 pub struct UpdateVault {
-    /// One protocol's curator policy, e.g. `Some(loan_limits.into())`,
-    /// `Some(ccip_lane.into())` or `Some(nest_route.into())`; an all-zero
-    /// payload disables that protocol.
-    pub policy: Option<ProtocolPolicy>,
     pub curator: Address,
     pub vault: Address,
     pub paused: Option<u8>,
@@ -138,6 +134,12 @@ pub struct AssetUpdateFields {
     /// deposit-enabled. The lowest-index enabled row is canonical for instant
     /// settlement; later rows are queued-only.
     pub deposit_enabled: Option<bool>,
+    /// Quote leg feed id: the row's price becomes `oracle` × this feed.
+    /// `Some(Address::default())` makes it single-feed again. Retires the
+    /// cached reading.
+    pub quote_oracle: Option<Address>,
+    /// Declared scale for the quote leg; retires the cached reading.
+    pub quote_report_decimals: Option<u8>,
 }
 
 /// Position-row risk-parameter update: `index` into `Vault.positions` plus
@@ -170,6 +172,8 @@ impl AssetUpdateFields {
             deployed: pod_opt(self.deployed),
             max_deposit: pod_opt(self.max_deposit),
             deposit_enabled: pod_opt(self.deposit_enabled.map(u8::from)),
+            quote_oracle: pod_opt(self.quote_oracle),
+            quote_report_decimals: pod_opt(self.quote_report_decimals),
         }
     }
 }
@@ -207,7 +211,6 @@ impl AssetAddFields {
 impl UpdateVault {
     fn arguments(&self) -> UpdateVaultArgs {
         UpdateVaultArgs {
-            policy: pod_opt(self.policy),
             paused: pod_opt(self.paused),
             timelock_delay: pod_opt(self.timelock_delay),
             pending_curator: pod_opt(self.pending_curator),
@@ -302,6 +305,8 @@ mod tests {
                 deployed: Some(500),
                 max_deposit: Some(2_000),
                 deposit_enabled: Some(false),
+                quote_oracle: Some(address(5)),
+                quote_report_decimals: Some(8),
             }),
             position_update: Some(PositionUpdateFields {
                 index: 3,
@@ -352,6 +357,8 @@ mod tests {
             Some(300)
         );
         assert_eq!(asset.deposit_enabled.get(), Some(0));
+        assert_eq!(asset.quote_oracle.get(), Some(address(5)));
+        assert_eq!(asset.quote_report_decimals.get(), Some(8));
         assert_eq!(asset.deployed.get().map(|value| value.get()), Some(500));
         assert_eq!(position.index, 3);
         assert_eq!(position.reset.get(), Some(1));

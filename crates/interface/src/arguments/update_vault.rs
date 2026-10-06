@@ -1,5 +1,4 @@
 use {
-    crate::state::ProtocolPolicy,
     codama_macros::CodamaType,
     solana_address::Address,
     wincode::{SchemaRead, SchemaWrite},
@@ -61,6 +60,14 @@ pub struct AssetUpdate {
     /// later rows are queued-only.
     #[codama(type = option(number(u8), fixed))]
     pub deposit_enabled: PodOption<u8>,
+    /// Quote leg feed id of a composed price; the zero address makes the row
+    /// single-feed again. Retires the cached reading like a rotation does.
+    #[codama(type = option(public_key, fixed))]
+    pub quote_oracle: PodOption<Address>,
+    /// [`AssetUpdate::report_decimals`] for the quote leg. Retires the cached
+    /// reading.
+    #[codama(type = option(number(u8), fixed))]
+    pub quote_report_decimals: PodOption<u8>,
 }
 
 impl ZcValidate for AssetUpdate {
@@ -73,7 +80,9 @@ impl ZcValidate for AssetUpdate {
         PodOption::validate_ref(&value.max_deployed)?;
         PodOption::validate_ref(&value.deployed)?;
         PodOption::validate_ref(&value.max_deposit)?;
-        PodOption::validate_ref(&value.deposit_enabled)
+        PodOption::validate_ref(&value.deposit_enabled)?;
+        PodOption::validate_ref(&value.quote_oracle)?;
+        PodOption::validate_ref(&value.quote_report_decimals)
     }
 }
 
@@ -189,11 +198,6 @@ unsafe impl ZcElem for PositionAdd {}
 #[wincode(assert_zero_copy)]
 #[repr(C)]
 pub struct UpdateVaultArgs {
-    /// Set one protocol's curator policy (Offerbook `LoanLimits`, CCIP
-    /// `CcipLane`, Nest `NestRoute`, …) by tag; an all-zero payload disables that protocol and
-    /// frees its slot. See [`ProtocolPolicy`].
-    #[codama(type = option(link("protocolPolicy"), fixed))]
-    pub policy: PodOption<ProtocolPolicy>,
     #[codama(type = option(number(u8), fixed))]
     pub paused: PodOption<u8>,
     #[codama(type = option(number(u64, le), fixed))]

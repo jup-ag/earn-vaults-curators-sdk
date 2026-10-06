@@ -52,6 +52,10 @@ impl PrepareNestRedeem {
                     Address::from_str_const("Sysvar1nstructions1111111111111111111111111"),
                     false,
                 ),
+                crate::pda::protocol_policy_meta(
+                    &self.vault,
+                    earn_vaults_interface::state::Protocol::Nest,
+                ),
             ],
             data: super::encode(&VaultInstruction::PrepareNestRedeem),
         }

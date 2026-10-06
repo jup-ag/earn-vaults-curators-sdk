@@ -1,6 +1,7 @@
 mod delegate;
 mod escrow;
 mod policy;
+mod protocol_policy;
 mod vault;
 
 use {
@@ -10,7 +11,7 @@ use {
     solana_program_error::ProgramError,
     wincode::{SchemaRead, SchemaWrite, ZeroCopy, config::DefaultConfig},
 };
-pub use {delegate::*, escrow::*, policy::*, vault::*};
+pub use {delegate::*, escrow::*, policy::*, protocol_policy::*, vault::*};
 
 pub trait Account:
     ZeroCopy

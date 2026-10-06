@@ -25,14 +25,14 @@ use {
             AcceptCurator, AssetAddFields, AssetUpdateFields, CancelPartialRedeem, CancelRedeem,
             ClaimFees, ClaimRedeem, CrystallizeFees, FulfillRedeem, GrantRevokeDelegate,
             InitializeExtraAccountMetas, InitializeVault, PositionUpdateFields, PriceOpaque,
-            ProtocolCpi, Redeem, RedeemDirect, RefreshPrices, SubscribeDirect, UpdateShareMeta,
-            UpdateVault, ValidateAum,
+            ProtocolCpi, Redeem, RedeemDirect, RefreshPrices, SetProtocolPolicy, SubscribeDirect,
+            UpdateShareMeta, UpdateVault, ValidateAum,
         },
         pda::{
             derive_associated_token_account, derive_share_mint, derive_vault,
             derive_vault_authority,
         },
-        state::{CcipLane, LoanLimits, NestRoute, Protocol},
+        state::{CcipLane, CollateralTerms, LoanLimits, NestRoute, Protocol},
         zeropod::pod::{PodOption, PodU16, PodU32},
     },
     serde::{Deserialize, Serialize},
@@ -41,6 +41,7 @@ use {
     solana_instruction::{AccountMeta, Instruction},
     solana_signer::Signer,
     std::{
+        collections::BTreeMap,
         path::PathBuf,
         thread,
         time::{Duration, SystemTime},
@@ -182,6 +183,28 @@ enum Cmd {
         protocol: String,
         #[arg(long, default_value_t = JUPITER_SWAP_BIT)]
         permissions: u64,
+    },
+    /// Approve an unlisted collateral mint for the vault's Offerbook principal
+    /// offers: offers against it are priced from a Pyth update for `feed_id`
+    /// and capped at `max_ltv_bps` (APY, duration, expiry and size still come
+    /// from `--offerbook-limits`). Writes the vault's Offerbook `ProtocolPolicy` for the
+    /// mint; `--max-ltv-bps 0` closes it.
+    SetCollateralPolicy {
+        #[arg(long)]
+        curator: PathBuf,
+        #[arg(long)]
+        mint: String,
+        /// Pyth feed id, base58 (like `--other-feed-id`).
+        #[arg(long, default_value = "11111111111111111111111111111111")]
+        feed_id: String,
+        #[arg(long)]
+        max_ltv_bps: u16,
+        /// `0` = protocol default (1%).
+        #[arg(long, default_value_t = 0)]
+        max_confidence_bps: u16,
+        /// `0` = protocol default (15 s).
+        #[arg(long, default_value_t = 0)]
+        max_staleness_seconds: u32,
     },
     /// PriceOpaque: a PRICE delegate posts a position's base-denominated value
     /// into `Vault.positions[slot]` (the net Fluid mark for a loop). Must be
@@ -345,6 +368,20 @@ enum Cmd {
         /// source. Retires the cached reading, so refresh + re-validate after.
         #[arg(long, value_name = "N", requires = "asset_index")]
         asset_report_decimals: Option<u8>,
+        /// Compose this row's price with a second feed (base58 feed id): the
+        /// price becomes the row's feed × this one, e.g. sUSDai/USDai ×
+        /// USDai/USD. `11111111111111111111111111111111` makes it single-feed
+        /// again. Retires the cached reading.
+        #[arg(long, value_name = "FEED_ID", requires = "asset_index")]
+        asset_quote_feed_id: Option<String>,
+        /// The quote feed's `PriceUpdateV2` **account**, remembered in state so
+        /// every bundled refresh carries both legs (a composed row only moves
+        /// when both arrive in one `RefreshPrices`).
+        #[arg(long, value_name = "ACCOUNT", requires = "asset_quote_feed_id")]
+        asset_quote_oracle: Option<String>,
+        /// Decimal scale the quote feed quotes at (see --asset-report-decimals).
+        #[arg(long, value_name = "N", requires = "asset_index")]
+        asset_quote_report_decimals: Option<u8>,
         /// Position row the risk flags below apply to (index into
         /// Vault.positions, 0..7).
         #[arg(long)]
@@ -435,6 +472,9 @@ enum Cmd {
     /// /swap-instructions API:
     ///   {"target_program":"JUP...","data_base64":"...",
     ///    "accounts":[{"pubkey":"..","is_signer":false,"is_writable":true}, ...]}
+    /// An Offerbook create/fill, a CCIP send or a Nest call must end its
+    /// `accounts` with the vault's protocol policy account
+    /// `["protocol_policy", vault, protocol, zero key]` (read-only).
     ProtocolCpi {
         #[arg(long)]
         delegate: PathBuf,
@@ -598,9 +638,28 @@ struct State {
     user_share: String,
     vault_base: String,
     vault_other: String,
+    /// Quote-leg `PriceUpdateV2` accounts of composed rows, by asset index.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    quote_oracles: BTreeMap<u8, String>,
 }
 
 impl State {
+    /// Every `PriceUpdateV2` a refresh must carry: base, other, then the quote
+    /// legs of composed rows (deduped — a quote may share another row's feed).
+    fn oracles(&self) -> Result<Vec<Address>> {
+        let mut out = vec![addr(&self.base_oracle)?];
+        if !self.vault_other.is_empty() {
+            out.push(addr(&self.other_oracle)?);
+        }
+        for o in self.quote_oracles.values() {
+            let o = addr(o)?;
+            if !out.contains(&o) {
+                out.push(o);
+            }
+        }
+        Ok(out)
+    }
+
     /// Derive the canonical base custody ATA so commands also work before
     /// `init-accounts` has populated the persisted custody field.
     fn vault_base_ata(&self, url: &str) -> Result<Address> {
@@ -887,11 +946,10 @@ fn wait_fresh_oracles(url: &str, oracles: &[Address]) -> Result<()> {
 fn validate_ixs(st: &State, url: &str, user: Address) -> Result<Vec<Instruction>> {
     let vault = addr(&st.vault)?;
     let mut custody_token_accounts = vec![st.vault_base_ata(url)?];
-    let mut price_updates = vec![addr(&st.base_oracle)?];
     if !st.vault_other.is_empty() {
         custody_token_accounts.push(addr(&st.vault_other)?);
-        price_updates.push(addr(&st.other_oracle)?);
     }
+    let price_updates = st.oracles()?;
     Ok(vec![
         RefreshPrices {
             vault,
@@ -959,6 +1017,7 @@ fn dispatch(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
         }
         command @ Cmd::InitVault { .. } => run_init_vault(ctx, command),
         command @ Cmd::GrantDelegate { .. } => run_grant_delegate(ctx, command),
+        command @ Cmd::SetCollateralPolicy { .. } => run_set_collateral_policy(ctx, command),
         command @ Cmd::PriceOpaque { .. } => run_price_opaque(ctx, command),
         command @ Cmd::InitAccounts { .. } => run_init_accounts(ctx, command),
         command @ Cmd::Subscribe { .. } => run_subscribe(ctx, command),
@@ -1140,6 +1199,44 @@ fn run_grant_delegate(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
     Ok(())
 }
 
+fn run_set_collateral_policy(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
+    let Cmd::SetCollateralPolicy {
+        curator,
+        mint,
+        feed_id,
+        max_ltv_bps,
+        max_confidence_bps,
+        max_staleness_seconds,
+    } = command
+    else {
+        unreachable!("dispatch passed the wrong command to run_set_collateral_policy")
+    };
+    let st = load_state(ctx.state_path)?;
+    let curator_kp = load_kp(&curator)?;
+    let terms = (max_ltv_bps != 0)
+        .then(|| -> Result<CollateralTerms> {
+            Ok(CollateralTerms {
+                feed_id: addr(&feed_id)?.to_bytes(),
+                max_ltv_bps: max_ltv_bps.into(),
+                max_confidence_bps: max_confidence_bps.into(),
+                max_staleness_seconds: max_staleness_seconds.into(),
+            })
+        })
+        .transpose()?;
+    let ix = SetProtocolPolicy::offerbook_collateral(
+        curator_kp.pubkey(),
+        addr(&st.vault)?,
+        addr(&mint)?,
+        terms,
+    )
+    .into_instruction();
+    println!(
+        "collateral policy set ({})",
+        send_opts(ctx.url, &[ix], &[&curator_kp], &[], false)?
+    );
+    Ok(())
+}
+
 fn run_price_opaque(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
     let Cmd::PriceOpaque {
         delegate,
@@ -1255,11 +1352,7 @@ fn run_subscribe(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
     // 20-30s old when they land, so the state files point at the
     // curator bot's self-posted accounts and we fire the moment its
     // next tick posts (the bot must be live).
-    let mut oracles = vec![addr(&st.base_oracle)?];
-    if !st.vault_other.is_empty() {
-        oracles.push(addr(&st.other_oracle)?);
-    }
-    wait_fresh_oracles(url, &oracles)?;
+    wait_fresh_oracles(url, &st.oracles()?)?;
     let ixs: Vec<Instruction> = [validate, vec![ix]].concat();
     println!(
         "subscribed {amount} ({})",
@@ -1309,11 +1402,7 @@ fn run_redeem_direct(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
         min_out,
     }
     .into_instruction();
-    let mut oracles = vec![addr(&st.base_oracle)?];
-    if !st.vault_other.is_empty() {
-        oracles.push(addr(&st.other_oracle)?);
-    }
-    wait_fresh_oracles(url, &oracles)?;
+    wait_fresh_oracles(url, &st.oracles()?)?;
     let ixs = [
         vec![create_ata_ix(user_pk, curator, share, token_2022)],
         validate_ixs(&st, url, user_pk)?,
@@ -1371,6 +1460,9 @@ fn run_update_vault(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
         asset_max_staleness,
         asset_deposit_enabled,
         asset_report_decimals,
+        asset_quote_feed_id,
+        asset_quote_oracle: asset_quote_account,
+        asset_quote_report_decimals,
         position_index,
         position_reset,
         max_flash_liability,
@@ -1387,7 +1479,7 @@ fn run_update_vault(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
     };
     let url = ctx.url;
 
-    let st = load_state(ctx.state_path)?;
+    let mut st = load_state(ctx.state_path)?;
     let curator_kp = load_kp(&curator)?;
     let pending_curator = pending_curator.map(|s| addr(&s)).transpose()?;
     let add_asset = add_asset_mint
@@ -1431,21 +1523,48 @@ fn run_update_vault(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
         }
         _ => None,
     };
+    // Protocol policies are their own accounts now: each flag becomes a
+    // `SetProtocolPolicy` in the same transaction; `disabled` closes it.
+    let (curator_key, vault_key) = (curator_kp.pubkey(), addr(&st.vault)?);
+    let mut ixs = Vec::new();
+    if let Some(spec) = offerbook_limits.as_deref() {
+        let limits = parse_offerbook_limits(spec)?;
+        let limits = limits.enabled().then_some(limits);
+        ixs.push(
+            SetProtocolPolicy::protocol_wide(curator_key, vault_key, Protocol::Offerbook, limits)
+                .into_instruction(),
+        );
+    }
+    if let Some(spec) = ccip_lane.as_deref() {
+        let lane = parse_ccip_lane(spec)?;
+        let lane = lane.enabled().then_some(lane);
+        ixs.push(
+            SetProtocolPolicy::protocol_wide(curator_key, vault_key, Protocol::Ccip, lane)
+                .into_instruction(),
+        );
+    }
+    if let Some(spec) = nest_route.as_deref() {
+        let route = parse_nest_route(spec)?;
+        let route = route.enabled().then_some(route);
+        ixs.push(
+            SetProtocolPolicy::protocol_wide(curator_key, vault_key, Protocol::Nest, route)
+                .into_instruction(),
+        );
+    }
+    let asset_quote_oracle = asset_quote_feed_id.as_deref().map(addr).transpose()?;
+    // A composed row's quote account must land in state, or every later
+    // refresh ships one leg and the row goes stale.
+    let quote_update = match (asset_index, asset_quote_oracle) {
+        (Some(index), Some(feed)) if feed == Address::default() => Some((index, None)),
+        (Some(index), Some(_)) => {
+            let account = asset_quote_account
+                .ok_or_else(|| anyhow!("--asset-quote-feed-id needs --asset-quote-oracle"))?;
+            addr(&account)?;
+            Some((index, Some(account)))
+        }
+        _ => None,
+    };
     let ix = UpdateVault {
-        policy: match (
-            offerbook_limits.as_deref(),
-            ccip_lane.as_deref(),
-            nest_route.as_deref(),
-        ) {
-            (Some(spec), None, None) => Some(parse_offerbook_limits(spec)?.into()),
-            (None, Some(spec), None) => Some(parse_ccip_lane(spec)?.into()),
-            (None, None, Some(spec)) => Some(parse_nest_route(spec)?.into()),
-            (None, None, None) => None,
-            _ => bail!(
-                "--offerbook-limits, --ccip-lane and --nest-route set one policy each; send \
-                 one call per policy"
-            ),
-        },
         add_asset,
         add_position,
         remove_asset,
@@ -1466,6 +1585,8 @@ fn run_update_vault(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
         performance_fee_bps,
         asset_update: asset_index.map(|index| AssetUpdateFields {
             report_decimals: asset_report_decimals,
+            quote_oracle: asset_quote_oracle,
+            quote_report_decimals: asset_quote_report_decimals,
             index,
             max_staleness_seconds: asset_max_staleness,
             deposit_enabled: asset_deposit_enabled,
@@ -1482,10 +1603,18 @@ fn run_update_vault(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
         ..Default::default()
     }
     .into_instruction();
+    ixs.push(ix);
     println!(
         "vault updated ({})",
-        send_opts(url, &[ix], &[&curator_kp], &[], false)?
+        send_opts(url, &ixs, &[&curator_kp], &[], false)?
     );
+    if let Some((index, account)) = quote_update {
+        match account {
+            Some(a) => st.quote_oracles.insert(index, a),
+            None => st.quote_oracles.remove(&index),
+        };
+        save_state(ctx.state_path, &st)?;
+    }
     Ok(())
 }
 
@@ -1537,11 +1666,7 @@ fn run_crystallize(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
     // refresh + validate rather than racing the keeper's cycle, same as
     // `subscribe`. The program creates missing fee PDAs with this signer as
     // payer, so off-chain callers do not have to provision destinations.
-    let mut oracles = vec![addr(&st.base_oracle)?];
-    if !st.vault_other.is_empty() {
-        oracles.push(addr(&st.other_oracle)?);
-    }
-    wait_fresh_oracles(url, &oracles)?;
+    wait_fresh_oracles(url, &st.oracles()?)?;
     let ixs = [validate_ixs(&st, url, signer_pk)?, vec![ix]].concat();
     println!(
         "fees crystallized ({})",
@@ -1991,6 +2116,31 @@ mod tests {
         assert_eq!(encoded, current);
         assert!(encoded.get("usdc_mint").is_none());
         assert!(encoded.get("cbbtc_mint").is_none());
+    }
+
+    #[test]
+    fn state_oracles_carry_quote_legs() {
+        let (base, other, quote) = (
+            Address::new_from_array([1; 32]).to_string(),
+            Address::new_from_array([2; 32]).to_string(),
+            Address::new_from_array([3; 32]).to_string(),
+        );
+        let mut state = State {
+            base_oracle: base.clone(),
+            other_oracle: other.clone(),
+            vault_other: "vault-other".into(),
+            ..Default::default()
+        };
+        // A shared feed is sent once; a distinct quote account is appended.
+        state.quote_oracles.insert(0, other.clone());
+        state.quote_oracles.insert(1, quote.clone());
+        let oracles: Vec<String> = state
+            .oracles()
+            .unwrap()
+            .iter()
+            .map(|a| a.to_string())
+            .collect();
+        assert_eq!(oracles, [base, other, quote]);
     }
 
     #[test]

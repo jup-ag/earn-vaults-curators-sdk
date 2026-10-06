@@ -8,8 +8,7 @@ use {
         },
         errors::VaultError,
         state::{
-            Account, AssetConfig, CcipLane, LoanLimits, MAX_ALLOWED_ASSETS, MAX_POLICIES,
-            MAX_POSITIONS, MAX_SINKS, NestRoute, PositionConfig, Protocol, ProtocolPolicy,
+            Account, AssetConfig, MAX_ALLOWED_ASSETS, MAX_POSITIONS, MAX_SINKS, PositionConfig,
             SinkSlot,
         },
     },
@@ -104,11 +103,6 @@ pub struct Vault {
     pub performance_fee_bps: PodU16,
     pub curator_fee_account_bump: u8,
     pub protocol_fee_account_bump: u8,
-    /// Curator policy per routed protocol (Offerbook loan limits, the CCIP
-    /// lane, …), tagged by [`Protocol`] and decoded by the owning adapter. See
-    /// [`ProtocolPolicy`]; typed reads via [`Vault::offerbook_limits`],
-    /// [`Vault::ccip_lane`] and [`Vault::nest_route`].
-    pub policies: [ProtocolPolicy; 8],
     /// Confidence discount `validate_aum` left in `aum`: `Σ(mid − floor)` over
     /// the spot rows, in bps of `aum`, rounded up. Every share mint adds it
     /// back so a band that closes on the next report pays the holders who
@@ -116,11 +110,15 @@ pub struct Vault {
     /// mints fail closed.
     #[codama(type = number(u16))]
     pub aum_conf_bps: PodU16,
-    /// Live `Delegate` PDAs. `grant_revoke_delegate` counts creates and
-    /// closes; `close_vault` refuses while any remain, so no grant can outlive
-    /// the vault and rebind to a same-address recreation (I-01).
-    pub delegate_count: u8,
-    _buffer: [u8; 3],
+    /// Live `Delegate` and `ProtocolPolicy` accounts. `grant_revoke_delegate`
+    /// and `set_protocol_policy` count creates and closes; `close_vault`
+    /// refuses while any remain, so no child can outlive the vault and rebind
+    /// to a same-address recreation (I-01).
+    #[codama(type = number(u16))]
+    pub child_count: PodU16,
+    /// Zero-initialised room for future fields. A field may only be carved out
+    /// of it if its zero value is the safe default ("off").
+    _reserved: [u8; 64],
 }
 
 /// Fee assets removed from the vault's accrued liabilities by one
@@ -186,64 +184,28 @@ fn refill_slippage_bucket(
 }
 
 impl Vault {
+    /// Count a newly created `Delegate` or `ProtocolPolicy` toward the
+    /// `close_vault` gate.
+    pub fn add_child(&mut self) -> Result<(), ProgramError> {
+        let count = self
+            .child_count
+            .get()
+            .checked_add(1)
+            .ok_or(ProgramError::InvalidArgument)?;
+        self.child_count = count.into();
+        Ok(())
+    }
+
+    /// Uncount a closed child. Saturating: delegates granted before the
+    /// counter existed (I-01) were never counted.
+    pub fn remove_child(&mut self) {
+        self.child_count = self.child_count.get().saturating_sub(1).into();
+    }
+
     /// The enabled, AUM-counted position tracking `protocol`. A scan, because
     /// slots are free: `initialize_vault` admits at most one enabled slot per
     /// protocol, which is what makes "first match" unambiguous.
     #[inline]
-    /// The stored policy for `protocol`, if the curator set one.
-    pub fn policy(&self, protocol: Protocol) -> Option<&ProtocolPolicy> {
-        self.policies
-            .iter()
-            .find(|p| !p.is_free() && p.protocol == protocol as u8)
-    }
-
-    /// Store, replace, or (for a disabled all-zero payload) free `policy`'s
-    /// slot. One slot per protocol; `InvalidArgument` when every slot is taken
-    /// by another protocol.
-    pub fn set_policy(&mut self, policy: ProtocolPolicy) -> Result<(), ProgramError> {
-        let tag = policy.protocol;
-        let slot = match self
-            .policies
-            .iter()
-            .position(|p| !p.is_free() && p.protocol == tag)
-        {
-            Some(i) => i,
-            None if policy.is_disabled() => return Ok(()),
-            None => self
-                .policies
-                .iter()
-                .position(ProtocolPolicy::is_free)
-                .ok_or(ProgramError::InvalidArgument)?,
-        };
-        self.policies[slot] = if policy.is_disabled() {
-            ProtocolPolicy::zero()
-        } else {
-            policy
-        };
-        Ok(())
-    }
-
-    /// Offerbook loan policy; the all-zero value means loans are closed.
-    #[inline]
-    pub fn offerbook_limits(&self) -> LoanLimits {
-        self.policy(Protocol::Offerbook)
-            .map_or(LoanLimits::zero(), ProtocolPolicy::decode)
-    }
-
-    /// CCIP destination lane; the all-zero value means bridging is off.
-    #[inline]
-    pub fn ccip_lane(&self) -> CcipLane {
-        self.policy(Protocol::Ccip)
-            .map_or(CcipLane::zero(), ProtocolPolicy::decode)
-    }
-
-    /// Nest composer / relayer / OFT route; the all-zero value means Nest is off.
-    #[inline]
-    pub fn nest_route(&self) -> NestRoute {
-        self.policy(Protocol::Nest)
-            .map_or(NestRoute::zero(), ProtocolPolicy::decode)
-    }
-
     pub fn find_position_mut(&mut self, protocol: u8) -> Option<&mut PositionConfig> {
         self.positions
             .iter_mut()
@@ -696,17 +658,16 @@ impl Account for Vault {
 }
 
 check_account_layout!(Vault);
-const _: () = assert!(core::mem::size_of::<[ProtocolPolicy; MAX_POLICIES]>() == 8 * 64);
 
 // Pin the deployed zero-copy ABI. The generic layout check above only proves
 // that `LEN` matches the current Rust type; these constants catch accidental
 // field insertion or reordering before it can strand existing vault accounts.
-const _: () = assert!(core::mem::size_of::<Vault>() == 2_209);
-const _: () = assert!(Vault::LEN == 2_210);
+const _: () = assert!(core::mem::size_of::<Vault>() == 2_151);
+const _: () = assert!(Vault::LEN == 2_152);
 const _: () = assert!(core::mem::offset_of!(Vault, management_fee_bps) == 106);
-const _: () = assert!(core::mem::offset_of!(Vault, performance_fee_bps) == 1_687);
-const _: () = assert!(core::mem::offset_of!(Vault, curator_fee_account_bump) == 1_689);
-const _: () = assert!(core::mem::offset_of!(Vault, protocol_fee_account_bump) == 1_690);
+const _: () = assert!(core::mem::offset_of!(Vault, performance_fee_bps) == 2_079);
+const _: () = assert!(core::mem::offset_of!(Vault, curator_fee_account_bump) == 2_081);
+const _: () = assert!(core::mem::offset_of!(Vault, protocol_fee_account_bump) == 2_082);
 
 // The row arrays are spelled with literal lengths because codama's IDL derive
 // cannot resolve a const there. This is the only thing keeping the literals and

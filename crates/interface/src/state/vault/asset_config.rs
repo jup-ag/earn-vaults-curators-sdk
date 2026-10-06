@@ -58,6 +58,18 @@ pub struct AssetConfig {
     pub last_price_expo: PodI32,
     #[codama(type = number(i64))]
     pub last_publish_time: PodI64,
+    /// Quote leg of a composed price: the row's price is `oracle` × this feed
+    /// (sUSDai/USD = sUSDai/USDai × USDai/USD), and the `last_*` reading above
+    /// is the composed one. Zero = a single-feed row.
+    pub quote_oracle: Address,
+    /// [`Self::report_decimals`] for the quote leg.
+    pub quote_report_decimals: u8,
+    /// Publish time of each leg last composed: the per-feed replay guard.
+    /// `last_publish_time` is the older of the two.
+    #[codama(type = number(i64))]
+    pub base_publish_time: PodI64,
+    #[codama(type = number(i64))]
+    pub quote_publish_time: PodI64,
 }
 
 impl AssetConfig {
@@ -79,7 +91,17 @@ impl AssetConfig {
             last_conf: PodU64::ZERO,
             last_price_expo: PodI32::ZERO,
             last_publish_time: PodI64::ZERO,
+            quote_oracle: Address::new_from_array([0; 32]),
+            quote_report_decimals: 0,
+            base_publish_time: PodI64::ZERO,
+            quote_publish_time: PodI64::ZERO,
         }
+    }
+
+    /// Whether the row's price is composed from two feeds.
+    #[inline]
+    pub fn composed(&self) -> bool {
+        !solana_address::address_eq(&self.quote_oracle, &Address::new_from_array([0; 32]))
     }
 
     /// Whether this row is configured at all. An unwritten row is all-zero, and

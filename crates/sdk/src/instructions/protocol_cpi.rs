@@ -17,7 +17,11 @@ pub struct ProtocolCpi {
     /// pins which programs this signer can drive.
     pub target_program: Address,
     /// CPI accounts in the exact order the inner ix expects (and the order
-    /// the on-chain validator's shape table is indexed in).
+    /// the on-chain validator's shape table is indexed in), then the vault's
+    /// policy accounts the call needs: Offerbook create/fill, CCIP and Nest
+    /// take their protocol-wide policy (`pda::protocol_policy_meta`) right
+    /// after the CPI's accounts; an Offerbook create against unlisted
+    /// collateral then adds that mint's policy and a price update.
     pub forwarded: Vec<AccountMeta>,
     /// Full inner-ix data: first 8 bytes are the inner ix discriminator
     /// (used by the dispatcher to select a validator), rest is the inner args.
