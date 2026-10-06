@@ -9,9 +9,9 @@ pub const SEED_EVENT_AUTHORITY: &[u8] = b"__event_authority";
 pub const EVENT_PDA: (Address, u8) =
     find_program_address_const(&[SEED_EVENT_AUTHORITY], &crate::ID);
 
-/// Maximum forwarded account entries per protocol CPI (excluding Yield's four
-/// routing accounts). Fluid `operate` uses 35 fixed slots, leaving 20 remaining
-/// accounts; see README.md, "Fluid routed account limit (I-04)".
+/// Maximum forwarded account entries per protocol CPI, excluding Earn Vaults'
+/// four routing accounts. Fluid `operate` uses 35 fixed slots, leaving 20
+/// remaining accounts.
 pub const MAX_ACTION_ACCOUNTS: usize = 55;
 
 /// Protocol's annual management fee on vault AUM, in bps. This is additive to

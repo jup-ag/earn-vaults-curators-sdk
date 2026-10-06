@@ -1,4 +1,4 @@
-//! `vault` — initialize and operate a Yield Store vault on a live Solana
+//! `earn-vaults` — initialize and operate Earn Vaults on a live Solana
 //! cluster. Commands use the Rust SDK instruction builders over JSON-RPC;
 //! protocol routes are supplied to `protocol-cpi` as JSON files.
 //!
@@ -61,10 +61,7 @@ const JUPITER: &str = "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4";
 const JUPITER_SWAP_BIT: u64 = 1 << 0;
 
 #[derive(Parser)]
-#[command(
-    name = "vault",
-    about = "Operate a Yield Store vault on a live cluster"
-)]
+#[command(name = "earn-vaults", about = "Operate Earn Vaults on a live cluster")]
 struct Cli {
     /// RPC endpoint.
     #[arg(
@@ -514,7 +511,7 @@ enum Cmd {
     },
     /// Build a Fluid (Jupiter Lend) route file for `protocol-cpi`. Encodes the
     /// ix data (borsh) and stamps signer/writable flags onto the ordered pubkey
-    /// list you supply. See `vault fluid --help` for the sub-instructions.
+    /// list you supply. See `earn-vaults fluid --help` for the sub-instructions.
     Fluid {
         #[command(subcommand)]
         ix: FluidIx,
