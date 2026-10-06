@@ -22,9 +22,8 @@ pub trait Account:
     const DISCRIMINATOR: u8;
 
     /// Return `Self` from the given account, after verifying the program owns
-    /// it and its data starts with [`Self::DISCRIMINATOR`] (length is checked
-    /// by [`Account::read`]: exactly [`Self::LEN`], so a stale-layout account
-    /// fails closed instead of parsing with shifted fields).
+    /// it, its data starts with [`Self::DISCRIMINATOR`], and its length is
+    /// exactly [`Self::LEN`].
     ///
     /// # Safety
     ///

@@ -37,14 +37,14 @@ pub struct LoanLimits {
     pub min_duration_seconds: PodU32,
     #[codama(type = number(u32))]
     pub max_duration_seconds: PodU32,
-    /// Maximum lifetime of a new standing offer, either side.
+    /// Maximum lifetime of a new standing (principal) offer.
     #[codama(type = number(u32))]
     pub max_offer_expiry_seconds: PodU32,
     /// Maximum principal oracle value per loan, in USD micro-units.
     #[codama(type = number(u64))]
     pub max_principal_value: PodU64,
     /// Zero permits any lender. Adapters must reject operations that cannot
-    /// enforce a nonzero lender, including open standing collateral offers.
+    /// enforce a nonzero lender.
     pub lender: Address,
 }
 

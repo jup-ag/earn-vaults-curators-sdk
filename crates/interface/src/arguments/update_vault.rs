@@ -43,11 +43,12 @@ pub struct AssetUpdate {
     /// Per-asset strategy-outflow ceiling; `0` = unlimited.
     #[codama(type = option(number(u64, le), fixed))]
     pub max_deployed: PodOption<PodU64>,
-    /// Restate the row's `deployed` counter outright (raw token units). Only
-    /// routed settlements move it, so custody that returns outside the program
-    /// — a CCIP OffRamp delivery into the custody ATA — leaves it overstated
-    /// until the curator corrects it here. Telemetry and the `max_deployed`
-    /// basis, never AUM.
+    /// Restate the remaining `deployed` charge across all protocols in raw token
+    /// units after verifying a principal return. CCIP OffRamp deliveries and
+    /// Offerbook escrow withdrawals leave this counter unchanged. Preserve
+    /// unrelated deployment charges; this affects both capacity caps, never AUM.
+    /// Listed Offerbook withdrawals already fold the position mark: do not reset
+    /// it; reconcile and re-attest the remaining value with `PriceOpaque`.
     #[codama(type = option(number(u64, le), fixed))]
     pub deployed: PodOption<PodU64>,
     /// Per-asset deposit capacity ceiling; `0` = unlimited.

@@ -173,6 +173,31 @@
                 "format": "u64",
                 "endian": "le"
               }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "minOut",
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "u64",
+                "endian": "le"
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "originalShares",
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "u64",
+                "endian": "le"
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "payoutMint",
+              "type": {
+                "kind": "publicKeyTypeNode"
+              }
             }
           ]
         },
@@ -988,6 +1013,15 @@
               "format": "u64",
               "endian": "le"
             }
+          },
+          {
+            "kind": "instructionArgumentNode",
+            "name": "minSharesOut",
+            "type": {
+              "kind": "numberTypeNode",
+              "format": "u64",
+              "endian": "le"
+            }
           }
         ],
         "discriminators": [
@@ -1655,6 +1689,22 @@
               "format": "u64",
               "endian": "le"
             }
+          },
+          {
+            "kind": "instructionArgumentNode",
+            "name": "minOut",
+            "type": {
+              "kind": "numberTypeNode",
+              "format": "u64",
+              "endian": "le"
+            }
+          },
+          {
+            "kind": "instructionArgumentNode",
+            "name": "payoutMint",
+            "type": {
+              "kind": "publicKeyTypeNode"
+            }
           }
         ],
         "discriminators": [
@@ -2117,6 +2167,15 @@
               "format": "u64",
               "endian": "le"
             }
+          },
+          {
+            "kind": "instructionArgumentNode",
+            "name": "minSharesOut",
+            "type": {
+              "kind": "numberTypeNode",
+              "format": "u64",
+              "endian": "le"
+            }
           }
         ],
         "discriminators": [
@@ -2317,6 +2376,15 @@
           {
             "kind": "instructionArgumentNode",
             "name": "shares",
+            "type": {
+              "kind": "numberTypeNode",
+              "format": "u64",
+              "endian": "le"
+            }
+          },
+          {
+            "kind": "instructionArgumentNode",
+            "name": "minOut",
             "type": {
               "kind": "numberTypeNode",
               "format": "u64",
@@ -3046,6 +3114,53 @@
             "defaultValue": {
               "kind": "numberValueNode",
               "number": 27
+            }
+          }
+        ],
+        "discriminators": [
+          {
+            "kind": "fieldDiscriminatorNode",
+            "name": "discriminator",
+            "offset": 0
+          }
+        ]
+      },
+      {
+        "kind": "instructionNode",
+        "name": "migrateEscrow",
+        "accounts": [
+          {
+            "kind": "instructionAccountNode",
+            "name": "payer",
+            "isWritable": true,
+            "isSigner": true
+          },
+          {
+            "kind": "instructionAccountNode",
+            "name": "escrow",
+            "isWritable": true,
+            "isSigner": false
+          },
+          {
+            "kind": "instructionAccountNode",
+            "name": "systemProgram",
+            "isWritable": false,
+            "isSigner": false
+          }
+        ],
+        "arguments": [
+          {
+            "kind": "instructionArgumentNode",
+            "name": "discriminator",
+            "defaultValueStrategy": "omitted",
+            "type": {
+              "kind": "numberTypeNode",
+              "format": "u8",
+              "endian": "le"
+            },
+            "defaultValue": {
+              "kind": "numberValueNode",
+              "number": 28
             }
           }
         ],
@@ -6151,6 +6266,24 @@
         "kind": "errorNode",
         "name": "nestRedeemSequenceInvalid",
         "code": 243,
+        "message": ""
+      },
+      {
+        "kind": "errorNode",
+        "name": "redeemOutputBelowMinimum",
+        "code": 244,
+        "message": ""
+      },
+      {
+        "kind": "errorNode",
+        "name": "subscribeOutputBelowMinimum",
+        "code": 245,
+        "message": ""
+      },
+      {
+        "kind": "errorNode",
+        "name": "redeemPayoutMintMismatch",
+        "code": 246,
         "message": ""
       }
     ]

@@ -126,8 +126,12 @@ pub struct AssetUpdateFields {
     pub max_staleness_seconds: Option<i64>,
     pub max_confidence_bps: Option<u16>,
     pub max_deployed: Option<u64>,
-    /// Restate the row's `deployed` counter after custody came back outside a
-    /// routed settlement (e.g. a CCIP OffRamp delivery).
+    /// Restate the remaining `deployed` charge across all protocols in raw token
+    /// units after verifying a principal return. CCIP OffRamp deliveries and
+    /// Offerbook escrow withdrawals leave this counter unchanged, consuming both
+    /// deployment and deposit capacity. Preserve unrelated deployment charges.
+    /// Listed Offerbook withdrawals already fold the position mark: do not reset
+    /// it; reconcile and re-attest the remaining value with `PriceOpaque`.
     pub deployed: Option<u64>,
     pub max_deposit: Option<u64>,
     /// Toggle deposits for this asset; a hand-priced row may not be

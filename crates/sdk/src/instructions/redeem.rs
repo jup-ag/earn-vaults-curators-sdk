@@ -12,12 +12,21 @@ use {
 /// and stamps an `Escrow` record the manager later fulfills against.
 /// `nonce` discriminates the escrow PDA — a user may hold several concurrent
 /// requests with distinct nonces.
+/// The user pins `payout_mint` and a minimum token/share ratio. Every fill must
+/// pay at least `ceil(min_out * settled_shares / original_shares)` raw tokens.
+/// The original denominator stays fixed across partial fills. Unfilled shares
+/// may be cancelled; collecting partial proceeds still observes the timelock.
 pub struct Redeem {
     pub user: Address,
     pub user_share_account: Address,
     pub vault: Address,
     pub shares: u64,
     pub nonce: u64,
+    /// Minimum raw payout tokens for the whole original request; zero opts out
+    /// of the rate bound but still pins the payout mint.
+    pub min_out: u64,
+    /// Must be a configured, deposit-enabled, AUM-priced vault asset.
+    pub payout_mint: Address,
 }
 
 impl Redeem {
@@ -27,9 +36,12 @@ impl Redeem {
 
         let shares = PodU64::from(self.shares);
         let nonce = PodU64::from(self.nonce);
+        let min_out = PodU64::from(self.min_out);
         let data = super::encode(&VaultInstruction::Redeem {
             shares: &shares,
             nonce: &nonce,
+            min_out: &min_out,
+            payout_mint: &self.payout_mint,
         });
 
         Instruction {

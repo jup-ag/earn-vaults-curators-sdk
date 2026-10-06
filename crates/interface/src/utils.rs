@@ -10,6 +10,35 @@ macro_rules! check_account_layout {
 use solana_address::{PDA_MARKER, address_eq};
 use {solana_address::Address, solana_program_error::ProgramError};
 
+/// Whether a Token-2022 account carries the `ImmutableOwner` extension.
+///
+/// Token accounts store their account-type byte after the 165-byte base
+/// layout, followed by TLV entries (`type: u16`, `len: u16`, value). Extension
+/// type 7 is `ImmutableOwner` and has an empty value.
+pub fn token_account_has_immutable_owner(data: &[u8]) -> bool {
+    const ACCOUNT_BASE_LEN: usize = 165;
+    const ACCOUNT_TYPE_ACCOUNT: u8 = 2;
+    const IMMUTABLE_OWNER: u16 = 7;
+
+    if data.get(ACCOUNT_BASE_LEN).copied() != Some(ACCOUNT_TYPE_ACCOUNT) {
+        return false;
+    }
+
+    let mut i = ACCOUNT_BASE_LEN + 1;
+    while let Some(header) = data.get(i..i + 4) {
+        let extension = u16::from_le_bytes([header[0], header[1]]);
+        let len = u16::from_le_bytes([header[2], header[3]]) as usize;
+        if extension == 0 {
+            return false;
+        }
+        if extension == IMMUTABLE_OWNER {
+            return len == 0;
+        }
+        i += 4 + len;
+    }
+    false
+}
+
 /// Compile-time PDA derivation (pure-Rust sha256 via `const_crypto`) — used
 /// for constants like `EVENT_PDA`. Too expensive for on-chain runtime use;
 /// the syscall forms below serve that.

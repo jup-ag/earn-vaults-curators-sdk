@@ -12,12 +12,15 @@
 //! not derivable without reimplementing Fluid's math. The caller supplies the
 //! full ordered pubkey list (from Fluid's SDK or a simulated tx); this module
 //! stamps the correct flags and encodes the args, then emits the JSON that
-//! `protocol-cpi --route-file` forwards. Optional slots that are unused should be
+//! `protocol-cpi --route-file` forwards. `operate`'s trailing remaining accounts
+//! (oracle sources, branches, tick-has-debt arrays) go in a separate list,
+//! split by `remaining_accounts_indices`. Optional slots that are unused should be
 //! passed as the target program id (Anchor's `None` placeholder).
 
 use {
     anyhow::{Result, anyhow, bail},
     base64::{Engine, engine::general_purpose::STANDARD as B64},
+    earn_vaults_interface::constants::MAX_ACTION_ACCOUNTS,
     serde_json::{Value, json},
 };
 
@@ -62,6 +65,48 @@ pub const FLASHLOAN_PAYBACK: Ix = Ix {
     disc: [213, 47, 153, 137, 84, 243, 94, 232],
     flags: &[3, 1, 1, 0, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0],
 };
+
+/// Append `operate`'s trailing remaining accounts to a built route. Fluid slices
+/// them by `indices` = [oracle sources, branches, tick-has-debt arrays]
+/// (`OPERATE_REMAINING_ACCOUNTS_COUNT` = 3): oracle sources are read-only (they
+/// feed the oracle CPI); branches and tick-has-debt arrays are `load_mut`-ed.
+pub fn append_operate_remaining(
+    route: &mut Value,
+    indices: &[u8],
+    pubkeys: &[String],
+) -> Result<()> {
+    let [oracle, branches, ticks] = indices else {
+        bail!(
+            "operate needs exactly 3 remaining-indices (oracle,branches,tick_has_debt), got {}",
+            indices.len()
+        );
+    };
+    let want = *oracle as usize + *branches as usize + *ticks as usize;
+    if pubkeys.len() != want {
+        bail!(
+            "remaining-indices {indices:?} sum to {want} accounts, got {}",
+            pubkeys.len()
+        );
+    }
+    let accounts = route["accounts"]
+        .as_array_mut()
+        .expect("build_route emits an array");
+    // protocol_cpi refuses wider routes on chain; fail before writing one.
+    if accounts.len() + want > MAX_ACTION_ACCOUNTS {
+        bail!(
+            "route needs {} forwarded accounts, protocol-cpi allows {MAX_ACTION_ACCOUNTS}",
+            accounts.len() + want
+        );
+    }
+    for (i, pk) in pubkeys.iter().enumerate() {
+        accounts.push(json!({
+            "pubkey": pk,
+            "is_signer": false,
+            "is_writable": i >= *oracle as usize,
+        }));
+    }
+    Ok(())
+}
 
 /// `operate`'s `transfer_type: Option<TransferType>` — borsh variant index.
 #[derive(Clone, Copy)]
@@ -202,5 +247,41 @@ mod tests {
 
         // wrong count fails fast.
         assert!(build_route(&OPERATE, vec![], &pks[..3]).is_err());
+    }
+
+    #[test]
+    fn operate_remaining_accounts_appended_with_split_flags() {
+        let pks: Vec<String> = (0..OPERATE.flags.len())
+            .map(|i| format!("key{i}"))
+            .collect();
+        let extra: Vec<String> = ["oracle", "branch", "tick0", "tick1"]
+            .map(String::from)
+            .into();
+        let mut r = build_route(&OPERATE, vec![], &pks).unwrap();
+        append_operate_remaining(&mut r, &[1, 1, 2], &extra).unwrap();
+        let a = r["accounts"].as_array().unwrap();
+        assert_eq!(a.len(), OPERATE.flags.len() + 4);
+        assert_eq!(a[35]["pubkey"], "oracle");
+        assert_eq!(a[35]["is_writable"], false);
+        assert!(
+            a[36..]
+                .iter()
+                .all(|x| x["is_writable"] == true && x["is_signer"] == false)
+        );
+
+        // zero extras still valid with the 0,0,0 default.
+        let mut r = build_route(&OPERATE, vec![], &pks).unwrap();
+        append_operate_remaining(&mut r, &[0, 0, 0], &[]).unwrap();
+        // wrong arity / count mismatch fail fast.
+        assert!(append_operate_remaining(&mut r, &[], &[]).is_err());
+        assert!(append_operate_remaining(&mut r, &[1, 0, 0], &[]).is_err());
+
+        // MAX_ACTION_ACCOUNTS fits; one more is refused before a route is written.
+        let fit = MAX_ACTION_ACCOUNTS - OPERATE.flags.len();
+        let extra: Vec<String> = (0..=fit).map(|i| format!("x{i}")).collect();
+        let mut r = build_route(&OPERATE, vec![], &pks).unwrap();
+        append_operate_remaining(&mut r, &[1, 0, fit as u8 - 1], &extra[..fit]).unwrap();
+        let mut r = build_route(&OPERATE, vec![], &pks).unwrap();
+        assert!(append_operate_remaining(&mut r, &[1, 0, fit as u8], &extra).is_err());
     }
 }

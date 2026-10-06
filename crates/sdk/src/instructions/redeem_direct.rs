@@ -13,6 +13,9 @@ use {
 /// shares). Reverts if the path is disabled (`InstantRedeemDisabled`), the AUM
 /// snapshot is stale (`StalePrice`), or idle base can't cover the full payout
 /// (`InsufficientIdleLiquidity`) — fall back to the queued [`crate::Redeem`].
+/// `min_out` is the least base-asset amount (base units, after the fee) the
+/// user accepts; a smaller payout reverts with `RedeemOutputBelowMinimum`.
+/// `0` disables the bound.
 /// `base_mint` must be the vault's canonical base asset (the first configured,
 /// deposit-enabled row); later deposit-enabled rows are queued-only.
 ///
@@ -28,6 +31,7 @@ pub struct RedeemDirect {
     pub curator_share_account: Address,
     pub base_token_program: Address,
     pub shares: u64,
+    pub min_out: u64,
 }
 
 impl RedeemDirect {
@@ -36,7 +40,11 @@ impl RedeemDirect {
         let vault_authority = derive_vault_authority(&self.vault);
 
         let shares = PodU64::from(self.shares);
-        let data = super::encode(&VaultInstruction::RedeemDirect { shares: &shares });
+        let min_out = PodU64::from(self.min_out);
+        let data = super::encode(&VaultInstruction::RedeemDirect {
+            shares: &shares,
+            min_out: &min_out,
+        });
 
         Instruction {
             program_id: crate::ID,

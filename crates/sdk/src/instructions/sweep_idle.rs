@@ -5,9 +5,9 @@ use {
     solana_instruction::{AccountMeta, Instruction},
 };
 
-/// Curator sweeps a listed asset's residual custody balance out of a vault
-/// with no user claims (supply and pending redeems all zero) — the teardown
-/// path for donated dust blocking `CloseVault`.
+/// Curator sweeps a listed asset or written-off sink's custody balance out of
+/// a vault with no user claims (supply and pending redeems both zero). Sweeping
+/// a sink also frees its slot so `CloseVault` can finish teardown.
 pub struct SweepIdle {
     pub curator: Address,
     pub vault: Address,

@@ -14,7 +14,7 @@ use {
 /// re-mints the burned shares back to the user (mint authority = vault-
 /// authority PDA) and closes the escrow. With `partial`, cancels a partially
 /// filled redeem: sweeps the escrowed proceeds to the user and re-mints the
-/// numéraire remainder as shares at current NAV.
+/// remaining unfilled shares exactly, without repricing them.
 pub struct CancelRedeem {
     pub user: Address,
     pub vault: Address,

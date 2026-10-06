@@ -1,4 +1,4 @@
-//! `vault` — initialize and operate a Earn Vaults vault on a live Solana
+//! `earn-vaults` — initialize and operate Earn Vaults on a live Solana
 //! cluster. Commands use the Rust SDK instruction builders over JSON-RPC;
 //! protocol routes are supplied to `protocol-cpi` as JSON files.
 //!
@@ -47,6 +47,7 @@ use {
     },
 };
 
+mod escrow_migration;
 mod fluid;
 
 // Default mainnet base-asset addresses.
@@ -60,10 +61,7 @@ const JUPITER: &str = "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4";
 const JUPITER_SWAP_BIT: u64 = 1 << 0;
 
 #[derive(Parser)]
-#[command(
-    name = "vault",
-    about = "Operate a Earn Vaults vault on a live cluster"
-)]
+#[command(name = "earn-vaults", about = "Operate Earn Vaults on a live cluster")]
 struct Cli {
     /// RPC endpoint.
     #[arg(
@@ -92,6 +90,14 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Count and list legacy escrows at finalized commitment (read-only).
+    EscrowMigrationStatus,
+    /// Extend one legacy escrow after deploying the upgraded program.
+    MigrateEscrow {
+        escrow: Address,
+        #[arg(long)]
+        payer: PathBuf,
+    },
     /// Print a live vault snapshot without a state file or keypair.
     Show {
         vault: Address,
@@ -211,6 +217,9 @@ enum Cmd {
         user: PathBuf,
         #[arg(long)]
         amount: u64,
+        /// Least shares (base units) to accept; 0 = no bound.
+        #[arg(long, default_value_t = 0)]
+        min_shares_out: u64,
     },
     /// RedeemDirect: burn shares and withdraw the base asset atomically.
     RedeemDirect {
@@ -218,6 +227,9 @@ enum Cmd {
         user: PathBuf,
         #[arg(long)]
         shares: u64,
+        /// Least base-asset payout (base units, after the fee) to accept; 0 = no bound.
+        #[arg(long, default_value_t = 0)]
+        min_out: u64,
     },
     /// ValidateAum: reprice the vault's base and optional other asset into AUM.
     ValidateAum {
@@ -300,19 +312,22 @@ enum Cmd {
         #[arg(long)]
         asset_index: Option<u8>,
         /// Capacity ceiling: reject subscriptions that would push this asset's
-        /// custody above CAP (raw token units, 0 = unlimited).
+        /// idle custody plus `deployed` above CAP (raw token units, 0 = unlimited).
         #[arg(long, value_name = "CAP", requires = "asset_index")]
         max_deposit: Option<u64>,
         /// Strategy-outflow ceiling: reject routed CPIs that would push this
         /// asset's `deployed` above CAP (raw token units, 0 = unlimited).
         #[arg(long, value_name = "CAP", requires = "asset_index")]
         max_deployed: Option<u64>,
-        /// Restate this asset's `deployed` counter (raw token units). Routed
-        /// CPIs are the only thing that moves it, so custody that comes back
-        /// outside the program — a CCIP OffRamp delivery — leaves it high until
-        /// you correct it here. Pair with `--position-index N --position-reset`
-        /// (full return) or a curator `price-opaque` (partial) so AUM stops
-        /// counting the bridged value twice.
+        /// Restate this asset's remaining `deployed` charge across all protocols
+        /// (raw token units), after verifying a principal return. CCIP OffRamp
+        /// deliveries and Offerbook escrow withdrawals do not lower it, leaving
+        /// both deployment and deposit capacity charged. Seized collateral does
+        /// not justify reducing an unrelated deployment's charge.
+        /// For CCIP, pair with `--position-index N --position-reset` (full return)
+        /// or a curator `price-opaque` (partial) to reconcile the remote value.
+        /// Listed Offerbook withdrawals already fold the position mark: do not
+        /// reset it; reconcile and re-attest the remaining value with `price-opaque`.
         #[arg(long, value_name = "AMOUNT", requires = "asset_index")]
         asset_deployed: Option<u64>,
         /// How stale this asset's cached reading may be, in seconds (0 = the
@@ -448,6 +463,9 @@ enum Cmd {
         /// Escrow nonce (distinct values allow concurrent requests).
         #[arg(long, default_value_t = 0)]
         nonce: u64,
+        /// Minimum raw base tokens for the full request (enforced pro rata per fill).
+        #[arg(long, default_value_t = 0)]
+        min_out: u64,
     },
     /// FulfillRedeem: curator prices the redemption against the base asset.
     FulfillRedeem {
@@ -493,7 +511,7 @@ enum Cmd {
     },
     /// Build a Fluid (Jupiter Lend) route file for `protocol-cpi`. Encodes the
     /// ix data (borsh) and stamps signer/writable flags onto the ordered pubkey
-    /// list you supply. See `vault fluid --help` for the sub-instructions.
+    /// list you supply. See `earn-vaults fluid --help` for the sub-instructions.
     Fluid {
         #[command(subcommand)]
         ix: FluidIx,
@@ -508,7 +526,8 @@ enum Cmd {
 #[derive(Subcommand)]
 enum FluidIx {
     /// `operate`: move collateral (`new_col`) and/or debt (`new_debt`), i128
-    /// base units (negative = withdraw/repay). 35 accounts.
+    /// base units (negative = withdraw/repay). 35 accounts, plus any
+    /// `--remaining-accounts`.
     Operate {
         #[arg(long)]
         accounts: PathBuf,
@@ -521,9 +540,15 @@ enum FluidIx {
         /// skip | direct | claim (omit for Option::None).
         #[arg(long)]
         transfer_type: Option<String>,
-        /// `remaining_accounts_indices` as comma-separated bytes (default none).
+        /// `remaining_accounts_indices` as `oracle,branches,tick_has_debt`
+        /// account counts. Fluid requires exactly 3.
+        #[arg(long, default_value = "0,0,0")]
+        remaining_indices: String,
+        /// JSON array of the trailing remaining accounts (oracle sources, then
+        /// branches, then tick-has-debt arrays), appended after the 35. Count
+        /// must equal the sum of `--remaining-indices`.
         #[arg(long)]
-        remaining_indices: Option<String>,
+        remaining_accounts: Option<PathBuf>,
     },
     /// `init_position`: open the position NFT. 13 accounts.
     InitPosition {
@@ -617,7 +642,7 @@ fn write_route(out: &Option<PathBuf>, route: Value) -> Result<()> {
         Some(p) => {
             std::fs::write(p, &text)?;
             println!(
-                "route → {} — forward with: vault protocol-cpi --delegate <kp> --route-file {}",
+                "route → {} — forward with: earn-vaults protocol-cpi --delegate <kp> --route-file {}",
                 p.display(),
                 p.display()
             );
@@ -911,6 +936,23 @@ fn main() -> Result<()> {
 
 fn dispatch(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
     match command {
+        Cmd::EscrowMigrationStatus => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&escrow_migration::inventory(ctx.url)?)?
+            );
+            Ok(())
+        }
+        Cmd::MigrateEscrow { escrow, payer } => {
+            let payer = load_kp(&payer)?;
+            let ix = earn_vaults_sdk::instructions::MigrateEscrow {
+                payer: payer.pubkey(),
+                escrow,
+            }
+            .into_instruction();
+            println!("{}", send_opts(ctx.url, &[ix], &[&payer], &[], false)?);
+            Ok(())
+        }
         Cmd::Show { vault, user } => {
             println!("{:#?}", fetch_snapshot(ctx.url, vault, user)?);
             Ok(())
@@ -1164,7 +1206,12 @@ fn run_init_accounts(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
 }
 
 fn run_subscribe(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
-    let Cmd::Subscribe { user, amount } = command else {
+    let Cmd::Subscribe {
+        user,
+        amount,
+        min_shares_out,
+    } = command
+    else {
         unreachable!("dispatch passed the wrong command to run_subscribe")
     };
     let url = ctx.url;
@@ -1198,6 +1245,7 @@ fn run_subscribe(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
         user_share_account: derive_associated_token_account(&user_pk, &share, &token_2022),
         base_token_program,
         amount,
+        min_shares_out,
     }
     .into_instruction();
     // The program creates the vault base TA + user share TA if missing.
@@ -1221,7 +1269,12 @@ fn run_subscribe(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
 }
 
 fn run_redeem_direct(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
-    let Cmd::RedeemDirect { user, shares } = command else {
+    let Cmd::RedeemDirect {
+        user,
+        shares,
+        min_out,
+    } = command
+    else {
         unreachable!("dispatch passed the wrong command to run_redeem_direct")
     };
     let url = ctx.url;
@@ -1253,6 +1306,7 @@ fn run_redeem_direct(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
         curator_share_account: derive_associated_token_account(&curator, &share, &token_2022),
         base_token_program,
         shares,
+        min_out,
     }
     .into_instruction();
     let mut oracles = vec![addr(&st.base_oracle)?];
@@ -1583,6 +1637,7 @@ fn run_redeem(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
         user,
         shares,
         nonce,
+        min_out,
     } = command
     else {
         unreachable!("dispatch passed the wrong command to run_redeem")
@@ -1597,6 +1652,8 @@ fn run_redeem(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
         vault: addr(&st.vault)?,
         shares,
         nonce,
+        min_out,
+        payout_mint: addr(&st.base_mint)?,
     }
     .into_instruction();
     println!(
@@ -1752,21 +1809,21 @@ fn run_fluid(command: Cmd) -> Result<()> {
             new_debt,
             transfer_type,
             remaining_indices,
+            remaining_accounts,
         } => {
             let transfer = transfer_type
                 .as_deref()
                 .map(fluid::TransferType::parse)
                 .transpose()?;
-            let remaining = match &remaining_indices {
-                Some(s) => s
-                    .split(',')
-                    .map(|b| b.trim().parse::<u8>().map_err(|e| anyhow!("{e}")))
-                    .collect::<Result<Vec<u8>>>()?,
-                None => vec![],
-            };
+            let remaining = remaining_indices
+                .split(',')
+                .map(|b| b.trim().parse::<u8>().map_err(|e| anyhow!("{e}")))
+                .collect::<Result<Vec<u8>>>()?;
+            let extra = remaining_accounts.as_ref().map(read_pubkeys).transpose()?;
             let data = fluid::operate_data(new_col, new_debt, transfer, &remaining);
-            fluid::build_route(&fluid::OPERATE, data, &read_pubkeys(&accounts)?)
-                .map(|r| (r, out))?
+            let mut route = fluid::build_route(&fluid::OPERATE, data, &read_pubkeys(&accounts)?)?;
+            fluid::append_operate_remaining(&mut route, &remaining, &extra.unwrap_or_default())?;
+            (route, out)
         }
         FluidIx::InitPosition {
             accounts,

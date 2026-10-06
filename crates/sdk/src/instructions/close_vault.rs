@@ -11,10 +11,13 @@ use {
 
 /// Curator closes a wound-down vault: the vault state, the share mint and any
 /// lamports parked on the authority PDA all refund to `recipient`, plus the
-/// `Policy` PDA when it exists, plus any `custody_token_accounts` passed (the
-/// vault's per-asset ATAs, already empty). Requires
-/// zero share supply, no in-flight redeems and zero AUM — run `SweepIdle` +
-/// `ValidateAum` first if donated dust is still counted.
+/// `Policy` PDA when it exists, plus every configured asset's empty custody
+/// ATA in vault asset order. Requires zero share supply, no in-flight redeems,
+/// zero AUM, no sinks, non-lender-only positions or deployments. A lender-only
+/// position may remain if its mark is zero. For any absent custody ATA, call
+/// the associated-token program's `CreateIdempotent` with the vault authority,
+/// asset mint and mint's token program. Run `SweepIdle` for idle assets or
+/// written-off sinks, then `ValidateAum` before closing.
 pub struct CloseVault {
     pub curator: Address,
     pub vault: Address,
