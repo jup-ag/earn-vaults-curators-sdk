@@ -642,7 +642,7 @@ fn write_route(out: &Option<PathBuf>, route: Value) -> Result<()> {
         Some(p) => {
             std::fs::write(p, &text)?;
             println!(
-                "route → {} — forward with: vault protocol-cpi --delegate <kp> --route-file {}",
+                "route → {} — forward with: earn-vaults protocol-cpi --delegate <kp> --route-file {}",
                 p.display(),
                 p.display()
             );
