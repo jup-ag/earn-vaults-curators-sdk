@@ -615,7 +615,6 @@ enum FluidIx {
 /// Persisted between subcommands. Addresses stored base58 for readability.
 #[derive(Serialize, Deserialize, Default)]
 struct State {
-    created_at: i64,
     curator: String,
     vault: String,
     share_mint: String,
@@ -625,9 +624,6 @@ struct State {
     base_oracle: String,
     other_oracle: String,
     user: String,
-    user_base: String,
-    user_share: String,
-    vault_base: String,
     vault_other: String,
     /// Quote-leg `PriceUpdateV2` accounts of composed rows, by asset index.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -1105,7 +1101,6 @@ fn run_init_vault(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
     let sig = send_opts(url, &[ix], &[&curator_kp], &[], false)?;
 
     let st = State {
-        created_at,
         curator: curator_pk.to_string(),
         vault: vault.to_string(),
         share_mint: derive_share_mint(&vault).to_string(),
@@ -1257,10 +1252,9 @@ fn run_init_accounts(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
     let token_2022 = addr(TOKEN_2022)?;
 
     st.user = user_pk.to_string();
-    st.user_base = create_ata(url, &user_kp, user_pk, base_mint, base_token_program)?.to_string();
-    st.user_share = create_ata(url, &user_kp, user_pk, share, token_2022)?.to_string();
-    st.vault_base =
-        create_ata(url, &curator_kp, authority, base_mint, base_token_program)?.to_string();
+    let user_base = create_ata(url, &user_kp, user_pk, base_mint, base_token_program)?;
+    create_ata(url, &user_kp, user_pk, share, token_2022)?;
+    create_ata(url, &curator_kp, authority, base_mint, base_token_program)?;
     // Base-only vaults (empty other asset) have no second custody ATA.
     if !st.other_mint.is_empty() {
         let other_mint = addr(&st.other_mint)?;
@@ -1269,10 +1263,7 @@ fn run_init_accounts(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
             create_ata(url, &curator_kp, authority, other_mint, other_token_program)?.to_string();
     }
     save_state(ctx.state_path, &st)?;
-    println!(
-        "accounts created (fund {} with the base asset before subscribe)",
-        st.user_base
-    );
+    println!("accounts created (fund {user_base} with the base asset before subscribe)");
     Ok(())
 }
 
@@ -2060,7 +2051,7 @@ mod tests {
 
     #[test]
     fn state_json_schema_uses_current_asset_names() {
-        let current = json!({
+        let legacy = json!({
             "created_at": 123,
             "curator": "curator",
             "vault": "vault",
@@ -2077,16 +2068,18 @@ mod tests {
             "vault_other": "vault-other",
         });
 
-        let state: State = serde_json::from_value(current.clone()).unwrap();
+        let state: State = serde_json::from_value(legacy.clone()).unwrap();
         assert_eq!(state.base_mint, "base-mint");
         assert_eq!(state.other_mint, "other-mint");
         assert_eq!(state.base_oracle, "base-oracle");
         assert_eq!(state.other_oracle, "other-oracle");
-        assert_eq!(state.user_base, "user-base");
-        assert_eq!(state.vault_base, "vault-base");
         assert_eq!(state.vault_other, "vault-other");
 
         let encoded = serde_json::to_value(state).unwrap();
+        let mut current = legacy;
+        for key in ["created_at", "user_base", "user_share", "vault_base"] {
+            current.as_object_mut().unwrap().remove(key);
+        }
         assert_eq!(encoded, current);
         assert!(encoded.get("usdc_mint").is_none());
         assert!(encoded.get("cbbtc_mint").is_none());
