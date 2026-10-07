@@ -3176,53 +3176,6 @@
       },
       {
         "kind": "instructionNode",
-        "name": "migrateEscrow",
-        "accounts": [
-          {
-            "kind": "instructionAccountNode",
-            "name": "payer",
-            "isWritable": true,
-            "isSigner": true
-          },
-          {
-            "kind": "instructionAccountNode",
-            "name": "escrow",
-            "isWritable": true,
-            "isSigner": false
-          },
-          {
-            "kind": "instructionAccountNode",
-            "name": "systemProgram",
-            "isWritable": false,
-            "isSigner": false
-          }
-        ],
-        "arguments": [
-          {
-            "kind": "instructionArgumentNode",
-            "name": "discriminator",
-            "defaultValueStrategy": "omitted",
-            "type": {
-              "kind": "numberTypeNode",
-              "format": "u8",
-              "endian": "le"
-            },
-            "defaultValue": {
-              "kind": "numberValueNode",
-              "number": 28
-            }
-          }
-        ],
-        "discriminators": [
-          {
-            "kind": "fieldDiscriminatorNode",
-            "name": "discriminator",
-            "offset": 0
-          }
-        ]
-      },
-      {
-        "kind": "instructionNode",
         "name": "setProtocolPolicy",
         "accounts": [
           {
@@ -3262,7 +3215,7 @@
             },
             "defaultValue": {
               "kind": "numberValueNode",
-              "number": 29
+              "number": 28
             }
           },
           {

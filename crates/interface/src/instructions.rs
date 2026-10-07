@@ -330,11 +330,6 @@ pub enum VaultInstruction<'de> {
     #[codama(account(name = "routePolicy"))]
     PrepareNestRedeem,
 
-    /// Extend a legacy escrow in place, preserving its request and prepaid rent.
-    #[codama(account(name = "payer", signer, writable))]
-    #[codama(account(name = "escrow", writable))]
-    #[codama(account(name = "systemProgram"))]
-    MigrateEscrow,
     /// Remaining accounts are whatever the protocol's policy validation reads
     /// (Offerbook: the collateral mint). An empty payload closes the policy.
     #[codama(account(name = "curator", signer, writable))]
@@ -433,8 +428,7 @@ unsafe impl<'de, C: Config> SchemaRead<'de, C> for VaultInstruction<'de> {
             },
             26 => Self::ClaimFees,
             27 => Self::PrepareNestRedeem,
-            28 => Self::MigrateEscrow,
-            29 => Self::SetProtocolPolicy {
+            28 => Self::SetProtocolPolicy {
                 args: <&SetProtocolPolicyArgs as SchemaRead<'de, C>>::get(reader.by_ref())?,
                 payload: <&[u8] as SchemaRead<'de, C>>::get(reader)?,
             },
@@ -581,5 +575,30 @@ unsafe impl<C: Config> SchemaWrite<C> for VaultInstruction<'_> {
             _ => {}
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use {super::*, wincode::Deserialize};
+
+    #[test]
+    fn removed_migrations_shift_policy_tag() {
+        let args = SetProtocolPolicyArgs {
+            protocol: 0,
+            key: Address::default(),
+        };
+        let ix = VaultInstruction::SetProtocolPolicy {
+            args: &args,
+            payload: &[],
+        };
+        let mut data = [0u8; 42];
+        wincode::serialize_into(&mut data[..], &ix).unwrap();
+        assert_eq!(data[0], 28);
+        assert!(VaultInstruction::deserialize(&data).is_ok());
+        data[0] = 29;
+        assert!(VaultInstruction::deserialize(&data).is_err());
+        data[0] = 30;
+        assert!(VaultInstruction::deserialize(&data).is_err());
     }
 }

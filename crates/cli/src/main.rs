@@ -48,7 +48,6 @@ use {
     },
 };
 
-mod escrow_migration;
 mod fluid;
 
 // Default mainnet base-asset addresses.
@@ -91,14 +90,6 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Count and list legacy escrows at finalized commitment (read-only).
-    EscrowMigrationStatus,
-    /// Extend one legacy escrow after deploying the upgraded program.
-    MigrateEscrow {
-        escrow: Address,
-        #[arg(long)]
-        payer: PathBuf,
-    },
     /// Print a live vault snapshot without a state file or keypair.
     Show {
         vault: Address,
@@ -994,23 +985,6 @@ fn main() -> Result<()> {
 
 fn dispatch(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
     match command {
-        Cmd::EscrowMigrationStatus => {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&escrow_migration::inventory(ctx.url)?)?
-            );
-            Ok(())
-        }
-        Cmd::MigrateEscrow { escrow, payer } => {
-            let payer = load_kp(&payer)?;
-            let ix = earn_vaults_sdk::instructions::MigrateEscrow {
-                payer: payer.pubkey(),
-                escrow,
-            }
-            .into_instruction();
-            println!("{}", send_opts(ctx.url, &[ix], &[&payer], &[], false)?);
-            Ok(())
-        }
         Cmd::Show { vault, user } => {
             println!("{:#?}", fetch_snapshot(ctx.url, vault, user)?);
             Ok(())

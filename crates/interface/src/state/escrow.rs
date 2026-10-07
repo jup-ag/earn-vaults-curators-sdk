@@ -11,7 +11,7 @@ pub const FULFILLED_PENDING: u8 = 0;
 pub const FULFILLED_DONE: u8 = 1;
 pub const FULFILLED_PARTIAL: u8 = 2;
 
-/// Pre-upgrade header, retained only for migration and hook compatibility.
+/// Pre-upgrade header, retained for transfer-hook compatibility.
 #[derive(SchemaRead, SchemaWrite)]
 #[wincode(assert_zero_copy)]
 #[repr(C)]
