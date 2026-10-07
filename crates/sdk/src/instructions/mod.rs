@@ -11,7 +11,6 @@ mod fulfill;
 mod fulfill_redeem;
 mod grant_revoke_delegate;
 mod initialize_vault;
-mod migrate_escrow;
 mod policy;
 mod prepare_nest_redeem;
 mod price_opaque;
@@ -20,6 +19,7 @@ mod redeem;
 mod redeem_direct;
 mod refresh_prices;
 mod set_paused;
+mod set_protocol_policy;
 mod subscribe;
 mod subscribe_direct;
 mod sweep_idle;
@@ -52,9 +52,9 @@ pub(crate) fn encode(ix: &VaultInstruction) -> Vec<u8> {
 pub use {
     accept_curator::*, cancel::*, cancel_redeem::*, claim::*, claim_fees::*, claim_redeem::*,
     close_vault::*, crystallize_fees::*, flash::*, fulfill::*, fulfill_redeem::*,
-    grant_revoke_delegate::*, initialize_vault::*, migrate_escrow::*, policy::*,
-    prepare_nest_redeem::*, price_opaque::*, protocol_cpi::*, redeem::*, redeem_direct::*,
-    refresh_prices::*, set_paused::*, subscribe::*, subscribe_direct::*, sweep_idle::*,
+    grant_revoke_delegate::*, initialize_vault::*, policy::*, prepare_nest_redeem::*,
+    price_opaque::*, protocol_cpi::*, redeem::*, redeem_direct::*, refresh_prices::*,
+    set_paused::*, set_protocol_policy::*, subscribe::*, subscribe_direct::*, sweep_idle::*,
     update_share_meta::*, update_vault::*, validate_aum::*,
 };
 

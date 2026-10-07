@@ -94,6 +94,9 @@ seeds! {
     /// `["delegate", vault, delegate, protocol_id]`
     DelegateSeeds = [b"delegate", vault: Address, delegate: Address, protocol_id: Address];
 
+    /// `["protocol_policy", vault, protocol, key]`
+    ProtocolPolicySeeds = [b"protocol_policy", vault: Address, protocol: [u8; 1], key: Address];
+
     /// `["escrow", vault, owner, nonce]`
     EscrowSeeds = [b"escrow", vault: Address, owner: Address, nonce: [u8]];
 

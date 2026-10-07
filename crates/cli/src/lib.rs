@@ -7,8 +7,7 @@ use {
     anyhow::{Result, anyhow, bail},
     base64::{Engine, engine::general_purpose::STANDARD as B64},
     earn_vaults_interface::{
-        constants::{VIRTUAL_ASSETS, VIRTUAL_SHARES},
-        nav::nav_per_share,
+        nav::{assets_for_redeem, nav_per_share},
         state::{Account as StateAccount, Vault},
     },
     earn_vaults_sdk::pda::{
@@ -370,12 +369,6 @@ pub struct VaultSnapshot {
     pub user_value: Option<u128>,
 }
 
-/// Redeemable numéraire (raw, `NUMERAIRE_DECIMALS`) for `shares` — mirrors the
-/// program's `assets_for_shares` (virtual offsets and all).
-fn assets_for_shares(shares: u64, supply: u64, aum: u64) -> u128 {
-    shares as u128 * (aum as u128 + VIRTUAL_ASSETS) / (supply as u128 + VIRTUAL_SHARES)
-}
-
 fn token_amount(url: &str, method: &str, target: &Address) -> u64 {
     // Returns 0 if the account/mint doesn't exist yet (not an error for display).
     // Read at "confirmed" so it matches the vault account's commitment.
@@ -462,7 +455,9 @@ pub fn fetch_snapshot(url: &str, vault: Address, user: Option<Address>) -> Resul
             let ata = derive_associated_token_account(&u, &share_mint, &token_2022);
             let shares = token_amount(url, "getTokenAccountBalance", &ata);
             // Value on the fee-net basis — what a redeem would actually price at.
-            let value = assets_for_shares(shares, eff_supply, eff_aum);
+            let value = assets_for_redeem(shares, eff_supply, eff_aum)
+                .map(u128::from)
+                .map_err(|e| anyhow!("snapshot redeem value: {e:?}"))?;
             (Some(shares), Some(value))
         }
         None => (None, None),

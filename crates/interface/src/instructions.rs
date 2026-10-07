@@ -1,6 +1,7 @@
 use {
     crate::arguments::{
-        InitializeVaultArgs, PriceOpaqueArgs, UpdateShareMetaArgs, UpdateVaultArgs,
+        InitializeVaultArgs, PriceOpaqueArgs, SetProtocolPolicyArgs, UpdateShareMetaArgs,
+        UpdateVaultArgs,
     },
     codama_macros::CodamaInstructions,
     solana_address::Address,
@@ -326,13 +327,21 @@ pub enum VaultInstruction<'de> {
     #[codama(account(name = "signerShareAccount", writable))]
     #[codama(account(name = "tokenProgram"))]
     #[codama(account(name = "instructionsSysvar"))]
+    #[codama(account(name = "routePolicy"))]
     PrepareNestRedeem,
 
-    /// Extend a legacy escrow in place, preserving its request and prepaid rent.
-    #[codama(account(name = "payer", signer, writable))]
-    #[codama(account(name = "escrow", writable))]
+    /// Remaining accounts are whatever the protocol's policy validation reads
+    /// (Offerbook: the collateral mint). An empty payload closes the policy.
+    #[codama(account(name = "curator", signer, writable))]
+    #[codama(account(name = "vault", writable))]
+    #[codama(account(name = "protocolPolicy", writable))]
     #[codama(account(name = "systemProgram"))]
-    MigrateEscrow,
+    SetProtocolPolicy {
+        args: &'de SetProtocolPolicyArgs,
+        #[codama(type = bytes)]
+        #[codama(size_prefix = number(u64))]
+        payload: &'de [u8],
+    },
     #[codama(skip)]
     Event = 254,
 }
@@ -419,7 +428,10 @@ unsafe impl<'de, C: Config> SchemaRead<'de, C> for VaultInstruction<'de> {
             },
             26 => Self::ClaimFees,
             27 => Self::PrepareNestRedeem,
-            28 => Self::MigrateEscrow,
+            28 => Self::SetProtocolPolicy {
+                args: <&SetProtocolPolicyArgs as SchemaRead<'de, C>>::get(reader.by_ref())?,
+                payload: <&[u8] as SchemaRead<'de, C>>::get(reader)?,
+            },
             254 => Self::Event,
             tag => return Err(ReadError::InvalidTagEncoding(tag as usize)),
         };
@@ -481,6 +493,10 @@ unsafe impl<C: Config> SchemaWrite<C> for VaultInstruction<'_> {
             }
             Self::UpdateShareMeta { args } => {
                 <&UpdateShareMetaArgs as SchemaWrite<C>>::size_of(args)?
+            }
+            Self::SetProtocolPolicy { args, payload } => {
+                <&SetProtocolPolicyArgs as SchemaWrite<C>>::size_of(args)?
+                    + <&[u8] as SchemaWrite<C>>::size_of(payload)?
             }
             _ => 0,
         };
@@ -552,8 +568,37 @@ unsafe impl<C: Config> SchemaWrite<C> for VaultInstruction<'_> {
             Self::UpdateShareMeta { args } => {
                 <&UpdateShareMetaArgs as SchemaWrite<C>>::write(writer.by_ref(), args)?;
             }
+            Self::SetProtocolPolicy { args, payload } => {
+                <&SetProtocolPolicyArgs as SchemaWrite<C>>::write(writer.by_ref(), args)?;
+                <&[u8] as SchemaWrite<C>>::write(writer.by_ref(), payload)?;
+            }
             _ => {}
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use {super::*, wincode::Deserialize};
+
+    #[test]
+    fn removed_migrations_shift_policy_tag() {
+        let args = SetProtocolPolicyArgs {
+            protocol: 0,
+            key: Address::default(),
+        };
+        let ix = VaultInstruction::SetProtocolPolicy {
+            args: &args,
+            payload: &[],
+        };
+        let mut data = [0u8; 42];
+        wincode::serialize_into(&mut data[..], &ix).unwrap();
+        assert_eq!(data[0], 28);
+        assert!(VaultInstruction::deserialize(&data).is_ok());
+        data[0] = 29;
+        assert!(VaultInstruction::deserialize(&data).is_err());
+        data[0] = 30;
+        assert!(VaultInstruction::deserialize(&data).is_err());
     }
 }

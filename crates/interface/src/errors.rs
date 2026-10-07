@@ -61,6 +61,8 @@ pub enum VaultError {
     SubscribeOutputBelowMinimum,
     /// A queued redeem must settle in the user's requested token.
     RedeemPayoutMintMismatch,
+    /// A `ProtocolPolicy` account names another vault, protocol or key.
+    PolicyMismatch,
 }
 
 impl From<VaultError> for ProgramError {
@@ -184,12 +186,12 @@ impl ToStr for VaultError {
             }
             Self::CcipLaneMismatch => {
                 "ccip_send must target exactly the chain selector and receiver of the \
-                 vault's CCIP lane policy (curator-set via update_vault; none = bridging \
+                 vault's CCIP lane policy (curator-set via set_protocol_policy; none = bridging \
                  disabled)"
             }
             Self::NestRouteMismatch => {
                 "the Nest burn / OFT send must target exactly the composer and relayer of \
-                 the vault's Nest route policy (curator-set via update_vault; none = Nest \
+                 the vault's Nest route policy (curator-set via set_protocol_policy; none = Nest \
                  disabled)"
             }
             Self::NestRedeemSequenceInvalid => {
@@ -199,6 +201,9 @@ impl ToStr for VaultError {
             Self::RedeemOutputBelowMinimum => "Redeem payout is below the caller's minimum",
             Self::SubscribeOutputBelowMinimum => "Deposit shares are below the caller's minimum",
             Self::RedeemPayoutMintMismatch => "Redeem payout mint differs from the user's request",
+            Self::PolicyMismatch => {
+                "the ProtocolPolicy account does not belong to this vault, protocol and key"
+            }
         }
     }
 }
