@@ -9,7 +9,7 @@ use {
         errors::VaultError,
         state::{
             Account, AssetConfig, MAX_ALLOWED_ASSETS, MAX_POSITIONS, MAX_SINKS, PositionConfig,
-            SinkSlot,
+            Protocol, SinkSlot,
         },
     },
     codama_macros::CodamaAccount,
@@ -222,6 +222,17 @@ impl Vault {
         self.positions
             .iter_mut()
             .find(|p| p.protocol == protocol && p.enabled() && p.required_in_aum())
+    }
+
+    /// Whether `protocol` has an enabled [`POSITION_FLAG_LENDER_ONLY`] slot —
+    /// the commitment every grant and routed call for it is checked against.
+    ///
+    /// [`POSITION_FLAG_LENDER_ONLY`]: crate::state::POSITION_FLAG_LENDER_ONLY
+    #[inline]
+    pub fn lender_only(&self, protocol: Protocol) -> bool {
+        self.positions
+            .iter()
+            .any(|p| p.protocol == protocol as u8 && p.enabled() && p.lender_only())
     }
 
     #[inline]

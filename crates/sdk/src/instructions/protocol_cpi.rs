@@ -9,6 +9,8 @@ use {
 /// `(target_program, first 8 bytes of cpi_data)` to a hardcoded validator
 /// that checks the delegate bit, validates account positions, and CPIs
 /// signing as the vault-authority PDA.
+/// A LENDER_ONLY JupiterLend slot refuses Fluid Vaults routes and accepts
+/// only Jupiter Earn settlements into that position.
 pub struct ProtocolCpi {
     pub signer: Address,
     pub vault: Address,

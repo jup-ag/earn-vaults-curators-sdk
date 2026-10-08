@@ -143,7 +143,9 @@ enum Cmd {
         /// `SLOT:PROTOCOL:FLAGS:STALENESS:DRIFT` (decimal). SLOT is the
         /// free index in `Vault.positions` (0..7). Protocol values: SpotTokens
         /// 0, Offerbook 1, JupiterLend 2 — at most one *enabled* slot each.
-        /// Flag values: REQUIRED_IN_AUM 1, DEBT 4, ENABLED 8.
+        /// Flag values: REQUIRED_IN_AUM 1, DEBT 4, ENABLED 8, LENDER_ONLY 64
+        /// (Offerbook or JupiterLend; on JupiterLend it means Earn-only — Fluid
+        /// Vaults refused for good, instant redemption admissible: `0:2:73:900:50`).
         /// STALENESS and DRIFT are three-way: leave the field EMPTY
         /// (`2:2:9:::50`) for the program default (60s / 2%), pass `0` for the
         /// loosest setting (the 7-day staleness ceiling / no drift budget), or
@@ -279,6 +281,12 @@ enum Cmd {
         /// same slot (send it first in the same tx).
         #[arg(long, value_name = "BPS")]
         performance_fee_bps: Option<u16>,
+        /// Instant-withdrawal exit fee in bps (50..=1000), or 65535 to disable
+        /// RedeemDirect. Refused while the vault's marks can move NAV by more
+        /// than the fee in one window — including any JupiterLend slot not
+        /// flagged Earn-only (LENDER_ONLY).
+        #[arg(long, value_name = "BPS")]
+        instant_redeem_fee_bps: Option<u16>,
         /// Onboard a NEW asset row: the mint address. Stales the cached AUM —
         /// create the custody ATA, refresh the price, and validate-aum before
         /// the vault flows again.
@@ -1429,6 +1437,7 @@ fn run_update_vault(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
         pending_curator,
         management_fee_bps,
         performance_fee_bps,
+        instant_redeem_fee_bps,
         add_asset_mint,
         add_asset_feed_id,
         add_asset_chainlink,
@@ -1572,6 +1581,7 @@ fn run_update_vault(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
         pending_curator,
         management_fee_bps,
         performance_fee_bps,
+        instant_redeem_fee_bps,
         asset_update: asset_index.map(|index| AssetUpdateFields {
             report_decimals: asset_report_decimals,
             quote_oracle: asset_quote_oracle,
@@ -1590,7 +1600,6 @@ fn run_update_vault(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
             reset: position_reset.then_some(true),
             ..Default::default()
         }),
-        ..Default::default()
     }
     .into_instruction();
     ixs.push(ix);
@@ -2357,6 +2366,8 @@ mod tests {
             "125",
             "--performance-fee-bps",
             "750",
+            "--instant-redeem-fee-bps",
+            "50",
             "--retire-debt",
             "0",
         ])
@@ -2374,6 +2385,7 @@ mod tests {
             remove_asset_mint,
             management_fee_bps,
             performance_fee_bps,
+            instant_redeem_fee_bps,
             retire_debt,
             ..
         } = cli.cmd
@@ -2392,6 +2404,7 @@ mod tests {
         assert_eq!(remove_asset_mint.as_deref(), Some("old-mint"));
         assert_eq!(management_fee_bps, Some(125));
         assert_eq!(performance_fee_bps, Some(750));
+        assert_eq!(instant_redeem_fee_bps, Some(50));
         assert_eq!(retire_debt, Some(0));
     }
 }

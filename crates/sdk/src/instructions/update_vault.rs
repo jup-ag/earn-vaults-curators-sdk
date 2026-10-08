@@ -75,7 +75,7 @@ pub struct UpdateVault {
     /// trailing account) must hold zero.
     pub remove_asset: Option<RemoveAssetFields>,
     /// Retire a position row with no live mark (never-priced, reset, or marked
-    /// to zero) and free its slot.
+    /// to zero) and free its slot. LENDER_ONLY slots cannot be removed.
     pub remove_position: Option<u8>,
     /// Attest full repayment of an explicit DEBT slot after verifying it
     /// off-chain. Records zero without changing drift limits; revalidate AUM
