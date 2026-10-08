@@ -19,6 +19,8 @@ use {
 /// the curator). Any non-zero bitmap grants — creates the PDA if absent,
 /// otherwise overwrites the existing bitmap. Revoking one PDA leaves the
 /// signer's grants on other protocols untouched.
+/// A LENDER_ONLY Offerbook slot rejects borrower permissions; a LENDER_ONLY
+/// JupiterLend slot rejects every Fluid Vaults grant.
 pub struct GrantRevokeDelegate {
     pub curator: Address,
     pub vault: Address,

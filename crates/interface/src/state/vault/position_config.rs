@@ -11,6 +11,13 @@ pub const POSITION_FLAG_DEBT: u8 = 1 << 2;
 pub const POSITION_FLAG_ENABLED: u8 = 1 << 3;
 pub const POSITION_FLAG_PRICED: u8 = 1 << 4;
 pub const POSITION_FLAG_INITIALIZED: u8 = 1 << 5;
+/// The vault never takes the protocol's borrower side, enforced on every grant
+/// and routed call and permanent for the vault's life (the slot can't be
+/// removed). Offerbook: no fill, repay or collateral offer. JupiterLend:
+/// **Earn-only** — the Fluid Vaults program (`jupr81…`, collateral posted to
+/// borrow against) is refused outright and only Jupiter Earn may settle into
+/// the mark, so it holds only Earn receipts, which no third party can
+/// liquidate.
 pub const POSITION_FLAG_LENDER_ONLY: u8 = 1 << 6;
 pub const POSITION_FLAG_CURATOR_MASK: u8 = POSITION_FLAG_REQUIRED_IN_AUM
     | POSITION_FLAG_DEBT
@@ -77,8 +84,8 @@ impl PositionConfig {
         self.flags & POSITION_FLAG_DEBT != 0
     }
 
-    /// See [`POSITION_FLAG_LENDER_ONLY`] — the protocol's borrower bits can
-    /// never be granted on this vault.
+    /// See [`POSITION_FLAG_LENDER_ONLY`] — borrower calls are refused, and a
+    /// JupiterLend slot accepts only Jupiter Earn settlements.
     #[inline]
     pub const fn lender_only(&self) -> bool {
         self.flags & POSITION_FLAG_LENDER_ONLY != 0
@@ -111,10 +118,38 @@ impl PositionConfig {
             return Err(ProgramError::InvalidArgument);
         }
         if flags & POSITION_FLAG_LENDER_ONLY != 0
-            && (protocol != Protocol::Offerbook || flags & POSITION_FLAG_ENABLED == 0)
+            && (!matches!(protocol, Protocol::Offerbook | Protocol::JupiterLend)
+                || flags & POSITION_FLAG_ENABLED == 0)
         {
             return Err(ProgramError::InvalidArgument);
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lender_only_accepts_earn_position_but_requires_supported_enabled_protocol() {
+        let flags =
+            POSITION_FLAG_ENABLED | POSITION_FLAG_REQUIRED_IN_AUM | POSITION_FLAG_LENDER_ONLY;
+        assert_eq!(
+            PositionConfig::validate_flags(flags, Protocol::JupiterLend),
+            Ok(())
+        );
+        assert_eq!(
+            PositionConfig::validate_flags(flags, Protocol::Offerbook),
+            Ok(())
+        );
+        assert_eq!(
+            PositionConfig::validate_flags(flags, Protocol::SpotTokens),
+            Err(ProgramError::InvalidArgument)
+        );
+        assert_eq!(
+            PositionConfig::validate_flags(flags & !POSITION_FLAG_ENABLED, Protocol::JupiterLend),
+            Err(ProgramError::InvalidArgument)
+        );
     }
 }

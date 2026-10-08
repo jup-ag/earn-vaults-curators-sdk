@@ -323,6 +323,12 @@ pub struct PositionRow {
     pub protocol: u8,
     pub debt: bool,
     pub required_in_aum: bool,
+    /// `POSITION_FLAG_LENDER_ONLY`: Offerbook lender-only, or JupiterLend
+    /// Earn-only (Fluid Vaults refused; instant redemption admissible).
+    pub lender_only: bool,
+    /// Stored mark windows: `0` = the program default; drift `65535` = waived.
+    pub max_staleness_seconds: u64,
+    pub max_drift_bps: u16,
     pub last_value: u64,
     pub last_priced_at: i64,
 }
@@ -429,6 +435,9 @@ pub fn fetch_snapshot(url: &str, vault: Address, user: Option<Address>) -> Resul
             protocol: p.protocol,
             debt: p.debt(),
             required_in_aum: p.required_in_aum(),
+            lender_only: p.lender_only(),
+            max_staleness_seconds: p.max_staleness_seconds.get(),
+            max_drift_bps: p.max_drift_bps.get(),
             last_value: p.last_value.get(),
             last_priced_at: p.last_priced_at.into(),
         })

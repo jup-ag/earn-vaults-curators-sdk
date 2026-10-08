@@ -139,7 +139,8 @@ impl ToStr for VaultError {
             }
             Self::LenderOnlyVault => {
                 "This vault's position slot is LENDER_ONLY — the protocol's borrower \
-                 permissions cannot be granted on it (fixed at initialize_vault)"
+                 side (Offerbook fills/repays, any Fluid Vaults call) can be neither \
+                 granted nor routed, and the slot cannot be removed"
             }
             Self::OracleExponentMismatch => {
                 "Price source reported a different exponent than the asset row's \
