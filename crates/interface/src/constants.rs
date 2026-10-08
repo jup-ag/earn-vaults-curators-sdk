@@ -1,7 +1,7 @@
 use {
     crate::utils::find_program_address_const,
     solana_address::Address,
-    zeropod::pod::{PodI64, PodU32, PodU64},
+    zeropod::pod::{PodI64, PodU64},
 };
 
 pub const SEED_EVENT_AUTHORITY: &[u8] = b"__event_authority";
@@ -41,26 +41,18 @@ const _: () =
 pub const PROTOCOL_TREASURY: Address =
     Address::from_str_const("GTmMKk9qdVzAsxrnLeXSgsAjf7UbWJph7TqfYZFnA6k6");
 
-/// Max age of `Vault.last_priced_at` when `fulfill` reads `Vault.aum`;
-/// `validate_aum` holds each priced slot to the same bound.
+/// Default freshness window for validated AUM, position marks and sink marks.
+/// Their respective curator-set windows override this default independently.
 const MAX_STALENESS: i64 = 60;
 pub const MAX_STALENESS_SECONDS: PodI64 = PodI64::new_from_array(MAX_STALENESS.to_le_bytes());
-/// The same window in the width an asset row stores it — see
-/// [`crate::state::AssetConfig::max_staleness_seconds`].
-pub const MAX_STALENESS_SECONDS_U32: PodU32 =
-    PodU32::new_from_array((MAX_STALENESS as u32).to_le_bytes());
 
-/// Ceiling on every curator-set staleness override — asset rows, position
-/// slots, and the sink window alike. Bounds how far a curator can widen the
-/// stale-price sandwich on anything the vault prices off a cached reading.
+/// Ceiling on curator-set position and sink staleness overrides.
+/// Asset oracle windows accept the full `u32` range independently.
 pub const MAX_PARAM_STALENESS_SECONDS: u64 = 7 * 24 * 60 * 60;
 
-/// Tighter ceiling for asset rows: settlement and recorded AUM still price each
-/// row from its cached spot reading. Instant subscribe/redeem share one
-/// canonical row, while the week above stays for positions and sinks —
-/// illiquid marks posted by a delegate. Bounded on write *and* clamped on read,
-/// including for older rows.
-pub const MAX_ASSET_STALENESS_SECONDS: i64 = 600;
+/// Legacy Chainlink OCR2 Store (not the Data Streams verifier).
+pub const CHAINLINK_OCR2_STORE_ID: Address =
+    Address::from_str_const("HEvSKofvBgfaexv23kMabbYqxasxU3mQ4ibBMEmJWHny");
 
 /// Stored in a bps window (position drift, sink bootstrap cap) the curator
 /// explicitly waived — `Some(0)` at the argument layer, where `None` means "the
@@ -74,19 +66,6 @@ pub const UNBOUNDED_BPS: u16 = u16::MAX;
 /// is `0` — the age a cached reading may reach at `validate_aum` and, because
 /// every settlement re-gates that cache, at every site that values off it.
 pub const DEFAULT_ASSET_STALENESS_SECONDS: i64 = 15;
-
-/// Settlement-grade freshness: the age past which a cached reading may not
-/// *size a money-moving settlement*: direct and queued share issuance, direct
-/// and queued redeem payouts, listed or unlisted swap defenses, and any
-/// protocol leg folded into a mark. A fold clears the mark's priced attestation,
-/// but retains its objective delta and can be re-attested unchanged at zero
-/// drift, so that delta must still use a recent reading. The row window
-/// tolerates keeper lag for valuation; a settlement executed at a price the
-/// market has already left can make its offsetting book entry agree only with
-/// that stale cache. A short window requires a near-contemporaneous
-/// `refresh_prices`, keeping the settlement and its accounting on a recent
-/// reading.
-pub const SETTLEMENT_MAX_STALENESS_SECONDS: i64 = 15;
 
 /// Pyth confidence cap in bps of price when an asset leaves
 /// `max_confidence_bps` at `0` — a blown-out band (depeg/halt) can't set AUM.
@@ -107,9 +86,8 @@ pub const SWAP_SLIPPAGE_WINDOW_SECONDS: i64 = 60 * 60;
 /// Swap slippage bucket capacity, in bps of AUM, refilling linearly over
 /// [`SWAP_SLIPPAGE_WINDOW_SECONDS`] — caps burst loss across hops that each
 /// clear [`MAX_SWAP_SLIPPAGE_BPS`], until the curator can `SetPaused`. Only
-/// meaningful under the settlement freshness gate
-/// ([`SETTLEMENT_MAX_STALENESS_SECONDS`]): struck off a lagged cache, both the
-/// floor and this bucket record nothing.
+/// meaningful with appropriately short per-asset freshness windows: struck
+/// off a lagged cache, both the floor and this bucket record nothing.
 pub const MAX_SWAP_SLIPPAGE_PER_WINDOW_BPS: u128 = 200;
 
 /// Same bucket for liquidations; higher because they're episodic and larger

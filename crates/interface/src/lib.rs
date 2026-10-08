@@ -7,6 +7,7 @@ pub mod constants;
 pub mod errors;
 pub mod events;
 pub mod nav;
+pub mod ocr2;
 pub mod seeds;
 pub mod state;
 

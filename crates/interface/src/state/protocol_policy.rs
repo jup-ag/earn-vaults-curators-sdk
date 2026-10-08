@@ -11,8 +11,9 @@ use {
 /// `["protocol_policy", vault, protocol, key]`: one curator policy for a routed
 /// protocol, outside the vault and unlimited in number. This header is
 /// followed by a payload only the owning adapter decodes — what `key` means
-/// and how long the payload is are the adapter's business (Offerbook: key =
-/// collateral mint, payload = [`CollateralTerms`](crate::state::CollateralTerms)).
+/// and how long the payload is are the adapter's business (Offerbook: zero key
+/// for [`LoanLimits`](crate::state::LoanLimits), collateral mint key for
+/// [`CollateralTerms`](crate::state::CollateralTerms)).
 #[derive(SchemaRead, SchemaWrite, CodamaAccount)]
 #[codama(discriminator(bytes = [5]))]
 #[wincode(assert_zero_copy)]

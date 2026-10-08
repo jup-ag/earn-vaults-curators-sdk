@@ -342,6 +342,11 @@ pub enum VaultInstruction<'de> {
         #[codama(size_prefix = number(u64))]
         payload: &'de [u8],
     },
+    /// Migrate the deployed mainnet vault to inline oracle configuration.
+    #[codama(account(name = "curator", signer, writable))]
+    #[codama(account(name = "vault", writable))]
+    #[codama(account(name = "systemProgram"))]
+    MigrateVault = 29,
     #[codama(skip)]
     Event = 254,
 }
@@ -432,6 +437,7 @@ unsafe impl<'de, C: Config> SchemaRead<'de, C> for VaultInstruction<'de> {
                 args: <&SetProtocolPolicyArgs as SchemaRead<'de, C>>::get(reader.by_ref())?,
                 payload: <&[u8] as SchemaRead<'de, C>>::get(reader)?,
             },
+            29 => Self::MigrateVault,
             254 => Self::Event,
             tag => return Err(ReadError::InvalidTagEncoding(tag as usize)),
         };
@@ -583,7 +589,7 @@ mod tests {
     use {super::*, wincode::Deserialize};
 
     #[test]
-    fn removed_migrations_shift_policy_tag() {
+    fn migration_preserves_existing_instruction_tags() {
         let args = SetProtocolPolicyArgs {
             protocol: 0,
             key: Address::default(),
@@ -597,7 +603,10 @@ mod tests {
         assert_eq!(data[0], 28);
         assert!(VaultInstruction::deserialize(&data).is_ok());
         data[0] = 29;
-        assert!(VaultInstruction::deserialize(&data).is_err());
+        assert!(matches!(
+            VaultInstruction::deserialize(&data),
+            Ok(VaultInstruction::MigrateVault)
+        ));
         data[0] = 30;
         assert!(VaultInstruction::deserialize(&data).is_err());
     }

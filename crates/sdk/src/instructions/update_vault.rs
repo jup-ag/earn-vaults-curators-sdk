@@ -48,6 +48,8 @@ pub struct UpdateVault {
     pub position_update: Option<PositionUpdateFields>,
     /// Transient liability cap in numéraire micro-units.
     pub max_flash_liability: Option<u64>,
+    /// Validated AUM age limit; Some(0) resets to 60s. Does not relax oracle limits.
+    pub max_aum_staleness_seconds: Option<u32>,
     /// Discount `validate_aum` applies to every sink mark.
     pub sink_haircut_bps: Option<u16>,
     /// Freshness window every sink mark is held to; `0` = the global default.
@@ -119,7 +121,10 @@ pub struct AssetUpdateFields {
     /// New declared scale for the row's feed; `Some(0)` hands it back to the
     /// source. Retires the cached reading, as a rotation does.
     pub report_decimals: Option<u8>,
+    /// Valuation and settlement age, 0..=u32::MAX; zero selects the 15s default.
     pub max_staleness_seconds: Option<i64>,
+    /// Independent future timestamp tolerance; zero rejects future observations.
+    pub max_future_skew_seconds: Option<u32>,
     pub max_confidence_bps: Option<u16>,
     pub max_deployed: Option<u64>,
     /// Restate the remaining `deployed` charge across all protocols in raw token
@@ -228,6 +233,7 @@ impl UpdateVault {
                     PodOption::some(position.to_wire())
                 }),
             max_flash_liability: pod_opt(self.max_flash_liability),
+            max_aum_staleness_seconds: pod_opt(self.max_aum_staleness_seconds),
             sink_haircut_bps: pod_opt(self.sink_haircut_bps),
             sink_max_staleness_seconds: pod_opt(self.sink_max_staleness_seconds),
             sink_bootstrap_cap_bps: pod_opt(self.sink_bootstrap_cap_bps),
@@ -244,6 +250,11 @@ impl UpdateVault {
             remove_asset: pod_opt(self.remove_asset.as_ref().map(|r| r.index)),
             remove_position: pod_opt(self.remove_position),
             retire_debt: pod_opt(self.retire_debt),
+            asset_max_future_skew_seconds: pod_opt(
+                self.asset_update
+                    .as_ref()
+                    .and_then(|a| a.max_future_skew_seconds),
+            ),
         }
     }
 
@@ -291,6 +302,7 @@ mod tests {
             paused: Some(4),
             timelock_delay: Some(0),
             pending_curator: Some(address(3)),
+            max_aum_staleness_seconds: Some(900),
             management_fee_bps: Some(100),
             performance_fee_bps: Some(200),
             instant_redeem_fee_bps: Some(u16::MAX),
@@ -300,6 +312,7 @@ mod tests {
                 chainlink: Some(true),
                 report_decimals: Some(18),
                 max_staleness_seconds: Some(300),
+                max_future_skew_seconds: Some(120),
                 max_confidence_bps: Some(50),
                 max_deployed: Some(1_000),
                 deployed: Some(500),
@@ -346,9 +359,11 @@ mod tests {
         let position = args.position.get().unwrap();
         let add_asset = args.add_asset.get().unwrap();
 
+        assert_eq!(args.max_aum_staleness_seconds.get().unwrap().get(), 900);
         assert_eq!(args.paused.get(), Some(4));
         assert_eq!(args.timelock_delay.get().map(|value| value.get()), Some(0));
         assert_eq!(asset.index, 2);
+        assert_eq!(args.asset_max_future_skew_seconds.get().unwrap().get(), 120);
         assert_eq!(asset.oracle.get(), Some(address(4)));
         assert_eq!(asset.flags.get(), Some(ASSET_FLAG_CHAINLINK));
         assert_eq!(asset.report_decimals.get(), Some(18));
