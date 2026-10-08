@@ -2,9 +2,9 @@ use {
     crate::{
         check_account_layout,
         constants::{
-            BOOTSTRAP_HWM_NAV, MAX_LIQ_SLIPPAGE_PER_WINDOW_BPS, MAX_SWAP_SLIPPAGE_PER_WINDOW_BPS,
-            NAV_SCALE, PROTOCOL_MANAGEMENT_FEE_BPS, PROTOCOL_PERFORMANCE_FEE_BPS, SECONDS_PER_YEAR,
-            SWAP_SLIPPAGE_WINDOW_SECONDS,
+            BOOTSTRAP_HWM_NAV, MAX_LIQ_SLIPPAGE_PER_WINDOW_BPS, MAX_STALENESS_SECONDS,
+            MAX_SWAP_SLIPPAGE_PER_WINDOW_BPS, NAV_SCALE, PROTOCOL_MANAGEMENT_FEE_BPS,
+            PROTOCOL_PERFORMANCE_FEE_BPS, SECONDS_PER_YEAR, SWAP_SLIPPAGE_WINDOW_SECONDS,
         },
         errors::VaultError,
         state::{
@@ -16,7 +16,7 @@ use {
     solana_address::{Address, address_eq},
     solana_program_error::ProgramError,
     wincode::{SchemaRead, SchemaWrite},
-    zeropod::pod::{PodI64, PodU16, PodU64, PodU128},
+    zeropod::pod::{PodI64, PodU16, PodU32, PodU64, PodU128},
 };
 
 #[derive(SchemaRead, SchemaWrite, CodamaAccount)]
@@ -116,9 +116,13 @@ pub struct Vault {
     /// to a same-address recreation (I-01).
     #[codama(type = number(u16))]
     pub child_count: PodU16,
-    /// Zero-initialised room for future fields. A field may only be carved out
-    /// of it if its zero value is the safe default ("off").
-    _reserved: [u8; 64],
+    /// Maximum age of validated AUM for settlement and first-mark bounds.
+    /// Zero selects 60 seconds; positive values apply exactly. Oracle,
+    /// position and sink freshness limits remain independent.
+    #[codama(type = number(u32))]
+    pub max_aum_staleness_seconds: PodU32,
+    /// Zero-initialised room for future fields.
+    _reserved: [u8; 60],
 }
 
 /// Fee assets removed from the vault's accrued liabilities by one
@@ -184,6 +188,14 @@ fn refill_slippage_bucket(
 }
 
 impl Vault {
+    #[inline]
+    pub fn aum_staleness_window(&self) -> i64 {
+        match self.max_aum_staleness_seconds.get() {
+            0 => i64::from(MAX_STALENESS_SECONDS),
+            seconds => i64::from(seconds),
+        }
+    }
+
     /// Count a newly created `Delegate` or `ProtocolPolicy` toward the
     /// `close_vault` gate.
     pub fn add_child(&mut self) -> Result<(), ProgramError> {
@@ -662,12 +674,15 @@ check_account_layout!(Vault);
 // Pin the deployed zero-copy ABI. The generic layout check above only proves
 // that `LEN` matches the current Rust type; these constants catch accidental
 // field insertion or reordering before it can strand existing vault accounts.
-const _: () = assert!(core::mem::size_of::<Vault>() == 2_151);
-const _: () = assert!(Vault::LEN == 2_152);
+const _: () = assert!(core::mem::size_of::<Vault>() == 2_183);
+const _: () = assert!(Vault::LEN == 2_184);
+const _: () = assert!(core::mem::offset_of!(Vault, max_aum_staleness_seconds) == 2_119);
+const _: () = assert!(core::mem::offset_of!(Vault, _reserved) == 2_123);
+const _: () = assert!(core::mem::size_of::<AssetConfig>() == 179);
 const _: () = assert!(core::mem::offset_of!(Vault, management_fee_bps) == 106);
-const _: () = assert!(core::mem::offset_of!(Vault, performance_fee_bps) == 2_079);
-const _: () = assert!(core::mem::offset_of!(Vault, curator_fee_account_bump) == 2_081);
-const _: () = assert!(core::mem::offset_of!(Vault, protocol_fee_account_bump) == 2_082);
+const _: () = assert!(core::mem::offset_of!(Vault, performance_fee_bps) == 2_111);
+const _: () = assert!(core::mem::offset_of!(Vault, curator_fee_account_bump) == 2_113);
+const _: () = assert!(core::mem::offset_of!(Vault, protocol_fee_account_bump) == 2_114);
 
 // The row arrays are spelled with literal lengths because codama's IDL derive
 // cannot resolve a const there. This is the only thing keeping the literals and

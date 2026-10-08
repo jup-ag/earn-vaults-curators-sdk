@@ -51,11 +51,11 @@ impl SetProtocolPolicy {
         }
     }
 
-    /// Approve `mint` as collateral for the vault's Offerbook principal offers
-    /// without listing it; `None` withdraws the approval. A delegate uses the
-    /// policy by appending `derive_protocol_policy(vault, Protocol::Offerbook,
-    /// mint)` and a Pyth `PriceUpdateV2` for `terms.feed_id` after the 10
-    /// `create_token_principal_offer` accounts.
+    /// Approve `mint` as collateral for Offerbook lending and borrowing.
+    /// Lending collateral may be unlisted; borrowing collateral must be listed.
+    /// Every create and fill needs this policy. `None` withdraws the approval.
+    /// The delegate appends it after the Offerbook accounts and global loan limits.
+    /// `mint = GENERAL_COLLATERAL` approves lending against any mint.
     pub fn offerbook_collateral(
         curator: Address,
         vault: Address,

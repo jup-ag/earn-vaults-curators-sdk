@@ -583,7 +583,7 @@ mod tests {
     use {super::*, wincode::Deserialize};
 
     #[test]
-    fn removed_migrations_shift_policy_tag() {
+    fn removed_migration_tag_is_rejected() {
         let args = SetProtocolPolicyArgs {
             protocol: 0,
             key: Address::default(),

@@ -688,6 +688,15 @@
             },
             {
               "kind": "structFieldTypeNode",
+              "name": "maxAumStalenessSeconds",
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "u32",
+                "endian": "le"
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
               "name": "reserved",
               "type": {
                 "kind": "arrayTypeNode",
@@ -698,7 +707,7 @@
                 },
                 "count": {
                   "kind": "fixedCountNode",
-                  "value": 64
+                  "value": 60
                 }
               }
             }
@@ -4558,6 +4567,42 @@
                   "endian": "le"
                 }
               }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "assetMaxFutureSkewSeconds",
+              "type": {
+                "kind": "optionTypeNode",
+                "fixed": true,
+                "item": {
+                  "kind": "numberTypeNode",
+                  "format": "u32",
+                  "endian": "le"
+                },
+                "prefix": {
+                  "kind": "numberTypeNode",
+                  "format": "u8",
+                  "endian": "le"
+                }
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "maxAumStalenessSeconds",
+              "type": {
+                "kind": "optionTypeNode",
+                "fixed": true,
+                "item": {
+                  "kind": "numberTypeNode",
+                  "format": "u32",
+                  "endian": "le"
+                },
+                "prefix": {
+                  "kind": "numberTypeNode",
+                  "format": "u8",
+                  "endian": "le"
+                }
+              }
             }
           ]
         }
@@ -4732,6 +4777,15 @@
                 "format": "i64",
                 "endian": "le"
               }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "maxFutureSkewSeconds",
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "u32",
+                "endian": "le"
+              }
             }
           ]
         }
@@ -4769,44 +4823,26 @@
           "fields": [
             {
               "kind": "structFieldTypeNode",
-              "name": "feedId",
+              "name": "principalMint",
               "type": {
-                "kind": "arrayTypeNode",
-                "item": {
-                  "kind": "numberTypeNode",
-                  "format": "u8",
-                  "endian": "le"
-                },
-                "count": {
-                  "kind": "fixedCountNode",
-                  "value": 32
-                }
+                "kind": "publicKeyTypeNode"
               }
             },
             {
               "kind": "structFieldTypeNode",
-              "name": "maxLtvBps",
+              "name": "maxPrincipalAmount",
               "type": {
                 "kind": "numberTypeNode",
-                "format": "u16",
+                "format": "u64",
                 "endian": "le"
               }
             },
             {
               "kind": "structFieldTypeNode",
-              "name": "maxConfidenceBps",
+              "name": "maxCollateralAmount",
               "type": {
                 "kind": "numberTypeNode",
-                "format": "u16",
-                "endian": "le"
-              }
-            },
-            {
-              "kind": "structFieldTypeNode",
-              "name": "maxStalenessSeconds",
-              "type": {
-                "kind": "numberTypeNode",
-                "format": "u32",
+                "format": "u64",
                 "endian": "le"
               }
             }
@@ -4819,15 +4855,6 @@
         "type": {
           "kind": "structTypeNode",
           "fields": [
-            {
-              "kind": "structFieldTypeNode",
-              "name": "minLtvBps",
-              "type": {
-                "kind": "numberTypeNode",
-                "format": "u16",
-                "endian": "le"
-              }
-            },
             {
               "kind": "structFieldTypeNode",
               "name": "maxApyBps",
@@ -4861,15 +4888,6 @@
               "type": {
                 "kind": "numberTypeNode",
                 "format": "u32",
-                "endian": "le"
-              }
-            },
-            {
-              "kind": "structFieldTypeNode",
-              "name": "maxPrincipalValue",
-              "type": {
-                "kind": "numberTypeNode",
-                "format": "u64",
                 "endian": "le"
               }
             },

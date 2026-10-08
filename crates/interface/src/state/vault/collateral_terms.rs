@@ -1,47 +1,43 @@
 use {
-    crate::constants::MAX_ASSET_STALENESS_SECONDS,
     codama_macros::CodamaType,
+    solana_address::Address,
     solana_program_error::ProgramError,
     wincode::{SchemaRead, SchemaWrite},
-    zeropod::{
-        ZcElem, ZcValidate,
-        error::ZeroPodError,
-        pod::{PodU16, PodU32},
-    },
+    zeropod::{ZcElem, ZcValidate, error::ZeroPodError, pod::PodU64},
 };
 
+/// Policy key of Offerbook's general collateral approval: [`CollateralTerms`]
+/// that let the vault **lend** against any collateral mint. Borrowing always
+/// needs the mint's own policy, since its collateral cap is in that mint's raw
+/// units and bounds vault value leaving custody. Approvals are a union: the
+/// delegate may pass either policy, so a mint policy under an open general one
+/// can only widen that mint's caps, and excluding a mint means closing this.
+/// The vault program's own address: an executable account, never a mint.
+pub const GENERAL_COLLATERAL: Address = crate::ID;
+
 /// Offerbook's [`ProtocolPolicy`](crate::state::ProtocolPolicy) payload, keyed by collateral
-/// mint: the curator's terms for lending against a mint the vault need not
-/// list. A standing principal offer that names the policy prices its collateral
-/// from a Pyth update for `feed_id` instead of the vault's cached prices.
+/// mint (or [`GENERAL_COLLATERAL`]): the curator's approval for lending or
+/// borrowing with that mint. The manager chooses loan terms; the policy caps
+/// raw token amounts per loan.
 #[derive(SchemaRead, SchemaWrite, Clone, Copy, CodamaType)]
 #[wincode(assert_zero_copy)]
 #[repr(C)]
 pub struct CollateralTerms {
-    /// The Pyth feed id every price update for this collateral must carry.
-    pub feed_id: [u8; 32],
-    /// The vault's LTV ceiling as lender: principal value at its ceiling over
-    /// collateral value at its floor, in basis points.
-    #[codama(type = number(u16))]
-    pub max_ltv_bps: PodU16,
-    /// Confidence band cap in basis points of price (`0` = protocol default).
-    #[codama(type = number(u16))]
-    pub max_confidence_bps: PodU16,
-    /// Price age cap in seconds (`0` = protocol default).
-    #[codama(type = number(u32))]
-    pub max_staleness_seconds: PodU32,
+    /// Only this listed principal mint may be offered against the policy key.
+    pub principal_mint: Address,
+    /// Maximum gross principal in the mint's raw token units, per offer.
+    #[codama(type = number(u64))]
+    pub max_principal_amount: PodU64,
+    /// Maximum raw collateral tokens pledged or promised in one loan.
+    #[codama(type = number(u64))]
+    pub max_collateral_amount: PodU64,
 }
 
 impl CollateralTerms {
-    /// A named feed and an LTV line, with freshness and band held to the same
-    /// write-time bounds as an asset row's.
     pub fn validate(&self) -> Result<(), ProgramError> {
-        let ltv = self.max_ltv_bps.get();
-        if ltv == 0
-            || ltv > 10_000
-            || self.feed_id == [0; 32]
-            || i64::from(self.max_staleness_seconds.get()) > MAX_ASSET_STALENESS_SECONDS
-            || self.max_confidence_bps.get() > 10_000
+        if self.principal_mint == Address::default()
+            || self.max_principal_amount.is_zero()
+            || self.max_collateral_amount.is_zero()
         {
             return Err(ProgramError::InvalidArgument);
         }
@@ -58,3 +54,5 @@ impl ZcValidate for CollateralTerms {
 // SAFETY: repr(C) over alignment-one POD fields with no padding; every bit
 // pattern is valid. `SetProtocolPolicy` validates the economic bounds separately.
 unsafe impl ZcElem for CollateralTerms {}
+
+const _: () = assert!(core::mem::size_of::<CollateralTerms>() == 48);

@@ -20,8 +20,8 @@ pub struct ProtocolCpi {
     /// the on-chain validator's shape table is indexed in), then the vault's
     /// policy accounts the call needs: Offerbook create/fill, CCIP and Nest
     /// take their protocol-wide policy (`pda::protocol_policy_meta`) right
-    /// after the CPI's accounts; an Offerbook create against unlisted
-    /// collateral then adds that mint's policy and a price update.
+    /// after the CPI's accounts; Offerbook create/fill then add the collateral
+    /// mint's policy (a create may pass `GENERAL_COLLATERAL`'s instead).
     pub forwarded: Vec<AccountMeta>,
     /// Full inner-ix data: first 8 bytes are the inner ix discriminator
     /// (used by the dispatcher to select a validator), rest is the inner args.

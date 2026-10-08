@@ -1,5 +1,5 @@
 use {
-    crate::constants::MAX_STALENESS_SECONDS_U32,
+    crate::constants::DEFAULT_ASSET_STALENESS_SECONDS,
     codama_macros::CodamaType,
     solana_address::Address,
     wincode::{SchemaRead, SchemaWrite},
@@ -22,11 +22,8 @@ pub struct AssetConfig {
     pub flags: u8,
     pub decimals: u8,
     pub ata_bump: u8,
-    /// Curator-set freshness window in seconds; `0` means
-    /// [`DEFAULT_ASSET_STALENESS_SECONDS`]. Stored as `u32` because the write
-    /// path caps it at one week.
-    ///
-    /// [`DEFAULT_ASSET_STALENESS_SECONDS`]: crate::constants::DEFAULT_ASSET_STALENESS_SECONDS
+    /// Maximum observation age for valuation and settlement, for every source.
+    /// Zero selects the 15s default; positive values apply without a ceiling.
     #[codama(type = number(u32))]
     pub max_staleness_seconds: PodU32,
     /// The decimal scale this row's price source quotes its raw mantissa at,
@@ -70,6 +67,10 @@ pub struct AssetConfig {
     pub base_publish_time: PodI64,
     #[codama(type = number(i64))]
     pub quote_publish_time: PodI64,
+    /// Maximum seconds an observation may lead the on-chain clock, for every source.
+    /// Zero rejects any future timestamp; positive values apply exactly.
+    #[codama(type = number(u32))]
+    pub max_future_skew_seconds: PodU32,
 }
 
 impl AssetConfig {
@@ -81,7 +82,9 @@ impl AssetConfig {
             flags: 0,
             decimals: 0,
             ata_bump: 255,
-            max_staleness_seconds: MAX_STALENESS_SECONDS_U32,
+            max_staleness_seconds: PodU32::new_from_array(
+                (DEFAULT_ASSET_STALENESS_SECONDS as u32).to_le_bytes(),
+            ),
             report_decimals: 0,
             max_confidence_bps: PodU16::ZERO,
             deployed: PodU64::ZERO,
@@ -95,6 +98,9 @@ impl AssetConfig {
             quote_report_decimals: 0,
             base_publish_time: PodI64::ZERO,
             quote_publish_time: PodI64::ZERO,
+            max_future_skew_seconds: PodU32::new_from_array(
+                (DEFAULT_ASSET_STALENESS_SECONDS as u32).to_le_bytes(),
+            ),
         }
     }
 

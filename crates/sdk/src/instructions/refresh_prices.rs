@@ -46,7 +46,9 @@ pub struct RefreshPrices {
     pub vault: Address,
     /// Signs and pays; the Chainlink verifier requires a signer of its own.
     pub user: Address,
-    /// Pyth `PriceUpdateV2` accounts, in any order.
+    /// Pyth `PriceUpdateV2` or legacy Chainlink OCR2 `Transmissions` accounts,
+    /// in any order. For OCR2 the row's oracle is the account address itself;
+    /// leave the Data Streams (`chainlink`) flag unset.
     pub price_updates: Vec<Address>,
     pub chainlink: Option<ChainlinkReports>,
 }

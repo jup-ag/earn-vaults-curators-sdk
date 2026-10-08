@@ -95,9 +95,9 @@ pub enum Settlement {
         /// Fold this leg's priced value into the tracked position's mark. A
         /// listed mint with this clear is `CpiSettlementInvalid` — the
         /// validator must decide, not the dispatcher. Ignored for an unlisted
-        /// mint, which has no row to price against. Listed folds use the tighter
-        /// settlement freshness window because the cached value is booked into
-        /// the mark, even though the mark then requires keeper reconciliation.
+        /// mint, which has no row to price against. Listed folds enforce the asset
+        /// row's configured oracle bounds before booking its cached value into
+        /// the mark, which then requires keeper reconciliation.
         fold_mark: bool,
         /// Allow the moved mint to have no `assets[]` row: skips valuation and
         /// `deployed` bookkeeping, so the value is carried only by the tracked
@@ -116,16 +116,15 @@ pub enum Settlement {
     ///   accounts to the vault's custody ATAs and floors the received amount
     ///   at the oracle-derived value of the sold amount (source row's cached
     ///   price → destination row's, minus `MAX_SWAP_SLIPPAGE_BPS`). Oracle rows
-    ///   must have been refreshed inside the tighter settlement freshness
-    ///   window — the delegate can't price its own route. Manual rows retain
-    ///   their configured row window.
+    ///   must be within each asset's configured freshness window — the
+    ///   delegate cannot supply its own route price.
     /// - **Unlisted source** (`allow_unlisted`, the `LIQUIDATE` bit): seized
     ///   collateral, no asset row, so no oracle floor. Destination must be a
     ///   deposit-enabled (base) asset, and the floor comes from the `Vault.sinks`
     ///   slot holding the mint being sold: `mark × (1 − MAX_LIQ_SLIPPAGE_BPS)`,
     ///   where `mark` must be positive (a written-off sink must be re-marked).
-    ///   Destination proceeds are valued through the same tighter settlement
-    ///   freshness gate, with the shortfall charged to a linearly refilling
+    ///   Destination proceeds use that asset's configured freshness window,
+    ///   with the shortfall charged to a linearly refilling
     ///   leaky bucket. The
     ///   sink is looked up *by* that mint, so the floor can only ever be the
     ///   mint's own mark — there is no stamp to compare, and so none to forget.
@@ -170,9 +169,7 @@ pub enum Settlement {
     /// observed repayment can then restore the extinguished liability without
     /// turning old, unmarked interest into a phantom asset. Borrow fees are
     /// still folded into the liability on the borrow side. Both legs price
-    /// through the tighter settlement window; oracle-backed rows therefore
-    /// need a near-contemporaneous `refresh_prices` (manual rows retain their
-    /// configured row window).
+    /// through each asset's configured freshness window.
     ///
     /// The fold is objective (actual token movements × last validated price),
     /// so it needs no drift guard and updates the stored mark by the complete

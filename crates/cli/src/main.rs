@@ -32,7 +32,7 @@ use {
             derive_associated_token_account, derive_share_mint, derive_vault,
             derive_vault_authority,
         },
-        state::{CcipLane, CollateralTerms, LoanLimits, NestRoute, Protocol},
+        state::{CcipLane, CollateralTerms, GENERAL_COLLATERAL, LoanLimits, NestRoute, Protocol},
         zeropod::pod::{PodOption, PodU16, PodU32},
     },
     serde::{Deserialize, Serialize},
@@ -89,6 +89,10 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "one parsed CLI command; boxing individual options adds needless indirection"
+)]
 enum Cmd {
     /// Print a live vault snapshot without a state file or keypair.
     Show {
@@ -175,27 +179,22 @@ enum Cmd {
         #[arg(long, default_value_t = JUPITER_SWAP_BIT)]
         permissions: u64,
     },
-    /// Approve an unlisted collateral mint for the vault's Offerbook principal
-    /// offers: offers against it are priced from a Pyth update for `feed_id`
-    /// and capped at `max_ltv_bps` (APY, duration, expiry and size still come
-    /// from `--offerbook-limits`). Writes the vault's Offerbook `ProtocolPolicy` for the
-    /// mint; `--max-ltv-bps 0` closes it.
+    /// Approve a collateral mint for Offerbook lending and borrowing. Lending
+    /// collateral may be unlisted; borrowing collateral must be listed. Every
+    /// create and fill needs this policy. `--max-principal-amount 0` closes it.
     SetCollateralPolicy {
         #[arg(long)]
         curator: PathBuf,
+        /// Collateral mint, or `general` to approve lending against any mint.
         #[arg(long)]
         mint: String,
-        /// Pyth feed id, base58 (like `--other-feed-id`).
-        #[arg(long, default_value = "11111111111111111111111111111111")]
-        feed_id: String,
+        /// Listed principal mint this collateral approval may be used with.
         #[arg(long)]
-        max_ltv_bps: u16,
-        /// `0` = protocol default (1%).
-        #[arg(long, default_value_t = 0)]
-        max_confidence_bps: u16,
-        /// `0` = protocol default (15 s).
-        #[arg(long, default_value_t = 0)]
-        max_staleness_seconds: u32,
+        principal_mint: Option<String>,
+        #[arg(long)]
+        max_principal_amount: u64,
+        #[arg(long)]
+        max_collateral_amount: Option<u64>,
     },
     /// PriceOpaque: a PRICE delegate posts a position's base-denominated value
     /// into `Vault.positions[slot]` (the net Fluid mark for a loop). Must be
@@ -256,9 +255,9 @@ enum Cmd {
     UpdateVault {
         #[arg(long)]
         curator: PathBuf,
-        /// Loan policy: MIN_LTV:MAX_APY:MIN_SECONDS:MAX_SECONDS:EXPIRY_SECONDS:MAX_USD_MICRO:LENDER.
-        /// Rates are basis points; LENDER is an address or `any`. Read from the vault's side: when it
-        /// lends, MIN_LTV is a ceiling and MAX_APY a floor. Use `disabled` to stop new loans.
+        /// Loan policy: APY:MIN_SECONDS:MAX_SECONDS:EXPIRY_SECONDS:LENDER.
+        /// APY is a ceiling when borrowing and a floor when lending; LENDER is
+        /// an address or `any`. Use `disabled` to stop new loans.
         #[arg(long, value_name = "SPEC")]
         offerbook_limits: Option<String>,
         /// Seconds between Redeem and ClaimRedeem (<= MAX_TIMELOCK_DELAY).
@@ -344,13 +343,12 @@ enum Cmd {
         /// reset it; reconcile and re-attest the remaining value with `price-opaque`.
         #[arg(long, value_name = "AMOUNT", requires = "asset_index")]
         asset_deployed: Option<u64>,
-        /// How stale this asset's cached reading may be, in seconds (0 = the
-        /// 60s default, max 7 days). Size it to the feed: a daily-published
-        /// RWA NAV can't clear a window built for Pyth. Every site that values
-        /// the row reads this, so widening it widens the stale-price sandwich
-        /// on this asset.
+        /// Valuation and settlement age (0 = 15s; positive values up to u32::MAX).
         #[arg(long, value_name = "SECS", requires = "asset_index")]
         asset_max_staleness: Option<i64>,
+        /// Maximum future timestamp skew for this asset; 0 rejects all future timestamps.
+        #[arg(long, requires = "asset_index")]
+        asset_max_future_skew: Option<u32>,
         /// Toggle deposits for this asset (a hand-priced row may not take
         /// deposits).
         #[arg(long, value_name = "BOOL", requires = "asset_index")]
@@ -392,6 +390,9 @@ enum Cmd {
         /// Sink-mark freshness window in seconds (0 = 60s, max 7 days).
         #[arg(long, value_name = "SECS")]
         sink_max_staleness: Option<u64>,
+        /// Validated AUM age limit in seconds (0 = 60s). Oracle limits stay separate.
+        #[arg(long, value_name = "SECS")]
+        max_aum_staleness: Option<u32>,
         /// Vault-wide ceiling on aggregate sink FIRST marks, in bps of validated
         /// AUM (0 = the 2% default). Size it to the total seized-collateral book.
         /// Later marks use the global 2%-per-window walk rate.
@@ -440,8 +441,8 @@ enum Cmd {
     /// as shares.
     /// NAV-neutral and timing-irrelevant (fees accrue as integrals folded at
     /// every flow), so run it whenever. Bundles `RefreshPrices` + `ValidateAum`:
-    /// fees mint at NAV, so the program gates `aum` on
-    /// `MAX_STALENESS_SECONDS` (60s). The program lazily creates both fee PDAs.
+    /// fees mint at NAV, so AUM must be validated in the same slot.
+    /// The program lazily creates both fee PDAs.
     Crystallize {
         /// Any keypair — pays the tx fee and rent for new fee PDAs.
         #[arg(long)]
@@ -756,34 +757,26 @@ fn parse_offerbook_limits(spec: &str) -> Result<LoanLimits> {
         return Ok(LoanLimits::zero());
     }
     let fields: Vec<_> = spec.split(':').collect();
-    let [
-        min_ltv,
-        apy,
-        min_duration,
-        max_duration,
-        expiry,
-        principal,
-        lender,
-    ] = fields.as_slice()
-    else {
-        bail!(
-            "want MIN_LTV:MAX_APY:MIN_SECONDS:MAX_SECONDS:EXPIRY_SECONDS:MAX_USD_MICRO:LENDER or disabled"
-        );
+    let [apy, min_duration, max_duration, expiry, lender] = fields.as_slice() else {
+        bail!("want APY:MIN_SECONDS:MAX_SECONDS:EXPIRY_SECONDS:LENDER or disabled");
     };
     let limits = LoanLimits {
-        min_ltv_bps: min_ltv.parse::<u16>().context("min LTV")?.into(),
         max_apy_bps: apy.parse::<u32>().context("max APY")?.into(),
         min_duration_seconds: min_duration.parse::<u32>().context("min duration")?.into(),
         max_duration_seconds: max_duration.parse::<u32>().context("max duration")?.into(),
         max_offer_expiry_seconds: expiry.parse::<u32>().context("offer expiry")?.into(),
-        max_principal_value: principal.parse::<u64>().context("principal value")?.into(),
         lender: if *lender == "any" {
             Address::default()
         } else {
             addr(lender)?
         },
     };
-    limits.validate().map_err(|_| anyhow!("invalid Offerbook limits: require 1 <= LTV line <= 10000, positive APY line/duration/expiry/principal cap, and max duration >= min duration"))?;
+    // A zero APY reads as `disabled`; say so explicitly instead.
+    if !limits.enabled() || limits.validate().is_err() {
+        bail!(
+            "invalid Offerbook limits: require positive APY line/duration/expiry and max duration >= min duration"
+        );
+    }
     Ok(limits)
 }
 
@@ -869,28 +862,48 @@ fn save_state(path: &PathBuf, s: &State) -> Result<()> {
 
 // --- account reads (freshness-sensitive; `rpc`/`send` live in the lib) -------
 
-/// Raw account data at "processed" commitment.
-fn account_data(url: &str, address: &Address) -> Result<Vec<u8>> {
-    // "processed": the default (finalized) lags ~13s — reading a keeper-posted
-    // oracle through it makes every freshness decision act on stale state.
+/// Observation time from a Pyth update or legacy OCR2 store account.
+fn oracle_publish_time(url: &str, oracle: &Address) -> Result<i64> {
     let v = rpc(
         url,
         "getAccountInfo",
-        json!([address.to_string(), {"encoding": "base64", "commitment": "processed"}]),
+        json!([oracle.to_string(), {"encoding": "base64", "commitment": "processed"}]),
     )?;
-    let data = v["value"]["data"][0]
-        .as_str()
-        .ok_or_else(|| anyhow!("account {address} not found on this cluster"))?;
-    Ok(B64.decode(data)?)
+    let account = &v["value"];
+    let owner = addr(
+        account["owner"]
+            .as_str()
+            .ok_or_else(|| anyhow!("{oracle} not found"))?,
+    )?;
+    let data = B64.decode(
+        account["data"][0]
+            .as_str()
+            .ok_or_else(|| anyhow!("{oracle} has no data"))?,
+    )?;
+    oracle_timestamp(&owner, &data)
 }
 
-/// `publish_time` of a `PriceUpdateV2` account (offset 93).
-fn oracle_publish_time(url: &str, oracle: &Address) -> Result<i64> {
-    account_data(url, oracle)?
-        .get(93..101)
+fn oracle_timestamp(owner: &Address, data: &[u8]) -> Result<i64> {
+    if owner == &earn_vaults_sdk::constants::CHAINLINK_OCR2_STORE_ID {
+        return earn_vaults_sdk::ocr2::read(owner, data)
+            .map(|reading| reading.timestamp)
+            .map_err(|e| anyhow!("invalid OCR2 account: {e}"));
+    }
+    if ![
+        "rec2HHDDnjLfj4kE7VyEtFA1HPGQLK33259532cRyHp",
+        "rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ",
+    ]
+    .iter()
+    .any(|id| owner == &Address::from_str_const(id))
+        || data.get(..8) != Some(&[34, 241, 35, 99, 157, 126, 244, 205])
+        || data.get(40) != Some(&1)
+    {
+        bail!("not an authenticated Pyth or OCR2 account");
+    }
+    data.get(93..101)
         .and_then(|s| s.try_into().ok())
         .map(i64::from_le_bytes)
-        .ok_or_else(|| anyhow!("{oracle} is not a PriceUpdateV2"))
+        .ok_or_else(|| anyhow!("truncated PriceUpdateV2"))
 }
 
 /// Block until every oracle's `publish_time` ADVANCES past its current value,
@@ -909,7 +922,9 @@ fn wait_fresh_oracles(url: &str, oracles: &[Address]) -> Result<()> {
         "waiting for the next oracle update ({} leg(s))…",
         oracles.len()
     );
-    for _ in 0..360 {
+    // Allow one OCR2 heartbeat plus reporting/landing delay (900s), with a
+    // minute of polling headroom. On-chain per-asset age gates remain final.
+    for _ in 0..1_920 {
         thread::sleep(Duration::from_millis(500));
         let advanced = oracles
             .iter()
@@ -920,16 +935,13 @@ fn wait_fresh_oracles(url: &str, oracles: &[Address]) -> Result<()> {
             return Ok(());
         }
     }
-    bail!(
-        "oracles never updated — is the curator daemon running live? \
-         (it re-posts these accounts every tick)"
-    )
+    bail!("oracles did not advance within 960s — check the feed publisher")
 }
 
 /// `RefreshPrices` + `ValidateAum` for the state file's rows — `validate_aum`
 /// takes no price accounts of its own, so a caller carrying its own freshness
-/// bundles the refresh ahead of it in the same transaction. Pyth only: a
-/// Chainlink row needs a DON report this CLI cannot fetch.
+/// bundles the refresh ahead of it in the same transaction. Pyth and OCR2
+/// accounts are supported; Data Streams needs a DON report this CLI cannot fetch.
 fn validate_ixs(st: &State, url: &str, user: Address) -> Result<Vec<Instruction>> {
     let vault = addr(&st.vault)?;
     let mut custody_token_accounts = vec![st.vault_base_ata(url)?];
@@ -1172,30 +1184,39 @@ fn run_set_collateral_policy(ctx: CommandContext<'_>, command: Cmd) -> Result<()
     let Cmd::SetCollateralPolicy {
         curator,
         mint,
-        feed_id,
-        max_ltv_bps,
-        max_confidence_bps,
-        max_staleness_seconds,
+        principal_mint,
+        max_principal_amount,
+        max_collateral_amount,
     } = command
     else {
         unreachable!("dispatch passed the wrong command to run_set_collateral_policy")
     };
     let st = load_state(ctx.state_path)?;
     let curator_kp = load_kp(&curator)?;
-    let terms = (max_ltv_bps != 0)
-        .then(|| -> Result<CollateralTerms> {
-            Ok(CollateralTerms {
-                feed_id: addr(&feed_id)?.to_bytes(),
-                max_ltv_bps: max_ltv_bps.into(),
-                max_confidence_bps: max_confidence_bps.into(),
-                max_staleness_seconds: max_staleness_seconds.into(),
+    let terms =
+        (max_principal_amount != 0)
+            .then(|| -> Result<CollateralTerms> {
+                Ok(CollateralTerms {
+                    principal_mint: addr(principal_mint.as_deref().context(
+                        "--principal-mint is required when enabling a collateral policy",
+                    )?)?,
+                    max_principal_amount: max_principal_amount.into(),
+                    max_collateral_amount: max_collateral_amount
+                        .context(
+                            "--max-collateral-amount is required when enabling a collateral policy",
+                        )?
+                        .into(),
+                })
             })
-        })
-        .transpose()?;
+            .transpose()?;
     let ix = SetProtocolPolicy::offerbook_collateral(
         curator_kp.pubkey(),
         addr(&st.vault)?,
-        addr(&mint)?,
+        if mint == "general" {
+            GENERAL_COLLATERAL
+        } else {
+            addr(&mint)?
+        },
         terms,
     )
     .into_instruction();
@@ -1286,7 +1307,7 @@ fn run_subscribe(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
     let authority = addr(&st.authority)?;
     let base_token_program = mint_token_program(url, &base_mint)?;
     let token_2022 = addr(TOKEN_2022)?;
-    // Deposit share-math needs AUM fresh within MAX_STALENESS_SECONDS
+    // Deposit share-math needs AUM fresh within the vault's configured window
     // (60s). `validate_aum` is permissionless, so carry our own
     // freshness in the same tx instead of racing the keeper's cycle.
     let validate = validate_ixs(&st, url, user_pk)?;
@@ -1423,6 +1444,7 @@ fn run_update_vault(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
         max_deployed,
         asset_deployed,
         asset_max_staleness,
+        asset_max_future_skew,
         asset_deposit_enabled,
         asset_report_decimals,
         asset_quote_feed_id,
@@ -1433,6 +1455,7 @@ fn run_update_vault(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
         max_flash_liability,
         sink_haircut_bps,
         sink_max_staleness,
+        max_aum_staleness,
         sink_bootstrap_cap_bps,
         sink_capacity,
         sink_release,
@@ -1538,6 +1561,7 @@ fn run_update_vault(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
         max_flash_liability,
         sink_haircut_bps,
         sink_max_staleness_seconds: sink_max_staleness,
+        max_aum_staleness_seconds: max_aum_staleness,
         sink_bootstrap_cap_bps,
         sink_capacity,
         sink_release,
@@ -1554,6 +1578,7 @@ fn run_update_vault(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
             quote_report_decimals: asset_quote_report_decimals,
             index,
             max_staleness_seconds: asset_max_staleness,
+            max_future_skew_seconds: asset_max_future_skew,
             deposit_enabled: asset_deposit_enabled,
             max_deployed,
             deployed: asset_deployed,
@@ -1998,17 +2023,15 @@ mod tests {
 
     #[test]
     fn offerbook_spec_validates_bounds_for_update() {
-        let spec = "5000:900:86400:604800:300:1000000:any";
+        let spec = "900:86400:604800:300:any";
         let limits = parse_offerbook_limits(spec).unwrap();
-        assert_eq!(limits.max_principal_value.get(), 1_000_000);
-        assert_eq!(limits.min_ltv_bps.get(), 5_000);
+        assert_eq!(limits.max_apy_bps.get(), 900);
         assert!(!parse_offerbook_limits("disabled").unwrap().enabled());
         for invalid in [
             "",
-            "5000:900",
-            "65536:900:86400:604800:300:1000000:any",
-            "10001:900:86400:604800:300:1000000:any",
-            "5000:900:0:604800:300:1000000:any",
+            "900:86400",
+            "0:86400:604800:300:any",
+            "900:0:604800:300:any",
         ] {
             assert!(parse_offerbook_limits(invalid).is_err());
         }

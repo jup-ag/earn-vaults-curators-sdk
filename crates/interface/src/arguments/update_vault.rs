@@ -33,7 +33,8 @@ pub struct AssetUpdate {
     /// [`AssetConfig::report_decimals`]: crate::state::AssetConfig::report_decimals
     #[codama(type = option(number(u8), fixed))]
     pub report_decimals: PodOption<u8>,
-    /// Per-asset staleness override; `0` means the global default.
+    /// Maximum observation age for valuation and settlement, 0..=u32::MAX.
+    /// Zero selects the 15s default. The i64 wire encoding is unchanged.
     #[codama(type = option(number(i64, le), fixed))]
     pub max_staleness_seconds: PodOption<PodI64>,
     /// Confidence cap in bps of price; `0` means the global default.
@@ -272,4 +273,13 @@ pub struct UpdateVaultArgs {
     /// with `remove_position` for the same slot.
     #[codama(type = option(number(u8), fixed))]
     pub retire_debt: PodOption<u8>,
+    /// Future timestamp tolerance for the row selected by `asset.index`.
+    /// None leaves it unchanged. Some(0) rejects any future timestamp;
+    /// every positive u32 value applies independently of the age limit.
+    /// Appended so the pre-upgrade UpdateVault encoding remains a prefix.
+    #[codama(type = option(number(u32, le), fixed))]
+    pub asset_max_future_skew_seconds: PodOption<PodU32>,
+    /// Validated AUM age limit; zero selects 60s, positive u32 values apply exactly.
+    #[codama(type = option(number(u32, le), fixed))]
+    pub max_aum_staleness_seconds: PodOption<PodU32>,
 }
