@@ -3258,53 +3258,6 @@
             "offset": 0
           }
         ]
-      },
-      {
-        "kind": "instructionNode",
-        "name": "migrateVault",
-        "accounts": [
-          {
-            "kind": "instructionAccountNode",
-            "name": "curator",
-            "isWritable": true,
-            "isSigner": true
-          },
-          {
-            "kind": "instructionAccountNode",
-            "name": "vault",
-            "isWritable": true,
-            "isSigner": false
-          },
-          {
-            "kind": "instructionAccountNode",
-            "name": "systemProgram",
-            "isWritable": false,
-            "isSigner": false
-          }
-        ],
-        "arguments": [
-          {
-            "kind": "instructionArgumentNode",
-            "name": "discriminator",
-            "defaultValueStrategy": "omitted",
-            "type": {
-              "kind": "numberTypeNode",
-              "format": "u8",
-              "endian": "le"
-            },
-            "defaultValue": {
-              "kind": "numberValueNode",
-              "number": 29
-            }
-          }
-        ],
-        "discriminators": [
-          {
-            "kind": "fieldDiscriminatorNode",
-            "name": "discriminator",
-            "offset": 0
-          }
-        ]
       }
     ],
     "definedTypes": [
