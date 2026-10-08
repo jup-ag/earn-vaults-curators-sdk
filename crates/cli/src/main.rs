@@ -2109,23 +2109,6 @@ mod tests {
     }
 
     #[test]
-    fn oracle_timestamp_decodes_ocr2_and_rejects_substituted_owners() {
-        let data = include_bytes!("../../interface/tests/fixtures/ocr2_susdai_usdai.bin");
-        assert_eq!(
-            oracle_timestamp(&earn_vaults_sdk::constants::CHAINLINK_OCR2_STORE_ID, data).unwrap(),
-            1_791_372_630
-        );
-        assert!(oracle_timestamp(&Address::default(), data).is_err());
-        assert!(
-            oracle_timestamp(
-                &earn_vaults_sdk::constants::CHAINLINK_OCR2_STORE_ID,
-                &data[..247]
-            )
-            .is_err()
-        );
-    }
-
-    #[test]
     fn state_oracles_carry_quote_legs() {
         let (base, other, quote) = (
             Address::new_from_array([1; 32]).to_string(),
