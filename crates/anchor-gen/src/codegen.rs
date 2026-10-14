@@ -219,6 +219,7 @@ pub struct TypeVm {
     /// Set when this type is one of the program's accounts.
     pub is_account: bool,
     pub has_discriminator: bool,
+    pub discriminator_is_field: bool,
     pub disc_csv: String,
     pub disc_len: usize,
 }
@@ -261,6 +262,7 @@ fn type_vm(ty: &TypeDef, disc: Option<&[u8]>) -> TypeVm {
         alias: String::new(),
         is_account: disc.is_some(),
         has_discriminator: disc.is_some(),
+        discriminator_is_field: false,
         disc_csv: disc
             .map(|d| {
                 d.iter()
@@ -326,6 +328,14 @@ fn type_vm(ty: &TypeDef, disc: Option<&[u8]>) -> TypeVm {
             vm.alias = rust_type(alias, "");
         }
     }
+    // Anchor IDLs do not distinguish embedded keys from separate prefixes.
+    // Metaplex Core's BaseAssetV1 stores discriminator [1] in its key field.
+    vm.discriminator_is_field = vm.name == "BaseAssetV1"
+        && disc == Some(&[1][..])
+        && vm
+            .fields
+            .first()
+            .is_some_and(|f| f.name == "key" && f.ty == "Key");
     vm
 }
 

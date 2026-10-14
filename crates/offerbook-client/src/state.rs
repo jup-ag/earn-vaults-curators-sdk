@@ -429,6 +429,32 @@ unsafe impl<'de, C: wincode::config::Config> SchemaRead<'de, C> for AssetFilter 
 }
 
 #[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
+pub struct BaseAssetV1 {
+    pub key: Key,
+    pub owner: Address,
+    pub update_authority: UpdateAuthority,
+    pub name: String,
+    pub uri: String,
+    pub seq: Option<u64>,
+}
+
+impl BaseAssetV1 {
+    /// On-chain account discriminator.
+    pub const DISCRIMINATOR: [u8; 1] = [1];
+
+    /// Verify the discriminator and deserialize the account data.
+    ///
+    /// Returns `None` if the discriminator does not match or the payload
+    /// fails to decode.
+    pub fn from_account_data(data: &[u8]) -> Option<Self> {
+        // The discriminator is the struct's key field, not a separate prefix.
+        data.strip_prefix(Self::DISCRIMINATOR.as_slice())?;
+        let payload = data;
+        wincode::config::deserialize(payload, crate::BorshConfig::new()).ok()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
 pub struct ClassicNftAsset {
     pub mint: Address,
     pub token_program: Address,
@@ -470,7 +496,8 @@ pub struct Config {
     pub is_paused: u8,
     pub disable_repayment: u8,
     pub _padding2: [u8; 2],
-    pub _reserved: [u8; 400],
+    pub operator: Address,
+    pub _reserved: [u8; 368],
 }
 
 impl Config {
@@ -519,6 +546,46 @@ pub struct EscrowWithdraw {
 impl EscrowWithdraw {
     /// Event discriminator.
     pub const DISCRIMINATOR: [u8; 8] = [171, 17, 164, 116, 122, 66, 183, 34];
+}
+
+/// Idle escrow tokens were compounded into the Jupiter Lend market
+/// (`escrow_yield_deposit`). Raw-escrow events (`EscrowDeposit` /
+/// `EscrowWithdraw`) keep their meaning untouched; the yield position is
+/// reconstructable from these events alone.
+#[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
+pub struct EscrowYieldDeposit {
+    pub user: Address,
+    pub mint: Address,
+    pub jl_mint: Address,
+    pub amount: u64,
+    pub share_amount: u64,
+    pub total_share_amount: u64,
+    pub total_amount: u64,
+    pub timestamp: u64,
+}
+
+impl EscrowYieldDeposit {
+    /// Event discriminator.
+    pub const DISCRIMINATOR: [u8; 8] = [99, 64, 76, 21, 60, 72, 42, 99];
+}
+
+/// Tokens were redeemed from the Jupiter Lend market back into the raw escrow
+/// (`escrow_yield_withdraw` shortfall top-up or `escrow_yield_withdraw_all`).
+#[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
+pub struct EscrowYieldWithdraw {
+    pub user: Address,
+    pub mint: Address,
+    pub jl_mint: Address,
+    pub amount: u64,
+    pub share_amount: u64,
+    pub total_share_amount: u64,
+    pub total_amount: u64,
+    pub timestamp: u64,
+}
+
+impl EscrowYieldWithdraw {
+    /// Event discriminator.
+    pub const DISCRIMINATOR: [u8; 8] = [41, 207, 38, 204, 174, 105, 122, 104];
 }
 
 #[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
@@ -614,6 +681,16 @@ pub struct FirstVerifiedCreatorFilter {
 }
 
 #[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
+pub enum Key {
+    Uninitialized,
+    AssetV1,
+    HashedAssetV1,
+    PluginHeaderV1,
+    PluginRegistryV1,
+    CollectionV1,
+}
+
+#[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
 pub struct Loan {
     pub lender: Address,
     pub borrower: Address,
@@ -640,7 +717,8 @@ pub struct Loan {
     pub extendable: u8,
     pub extension_count: u8,
     pub _padding4: [u8; 4],
-    pub _reserved: [u8; 48],
+    pub repaid_principal: u64,
+    pub _reserved: [u8; 40],
 }
 
 impl Loan {
@@ -680,6 +758,17 @@ impl LoanCreatedV1 {
 }
 
 #[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
+pub struct LoanCreatedV2 {
+    pub loan: LoanEventV2,
+    pub pubkey: Address,
+}
+
+impl LoanCreatedV2 {
+    /// Event discriminator.
+    pub const DISCRIMINATOR: [u8; 8] = [116, 244, 185, 253, 208, 104, 112, 135];
+}
+
+#[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
 pub struct LoanDefaulted {
     pub loan: LoanEventV0,
     pub pubkey: Address,
@@ -699,6 +788,17 @@ pub struct LoanDefaultedV1 {
 impl LoanDefaultedV1 {
     /// Event discriminator.
     pub const DISCRIMINATOR: [u8; 8] = [232, 160, 77, 36, 232, 60, 14, 73];
+}
+
+#[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
+pub struct LoanDefaultedV2 {
+    pub loan: LoanEventV2,
+    pub pubkey: Address,
+}
+
+impl LoanDefaultedV2 {
+    /// Event discriminator.
+    pub const DISCRIMINATOR: [u8; 8] = [80, 77, 48, 94, 217, 75, 184, 167];
 }
 
 /// Frozen pre-extension loan event schema. Kept in the IDL so historical events
@@ -726,6 +826,8 @@ pub struct LoanEventV0 {
     pub loan_type: LoanType,
 }
 
+/// Frozen pre-partial-repayment loan event schema. Kept in the IDL so historical
+/// events remain parseable; not emitted by current code (see `LoanEventV2`).
 #[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
 pub struct LoanEventV1 {
     pub lender: Address,
@@ -752,6 +854,35 @@ pub struct LoanEventV1 {
 }
 
 #[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
+pub struct LoanEventV2 {
+    pub lender: Address,
+    pub borrower: Address,
+    pub creator: Address,
+    pub offer: Address,
+    pub status: LoanStatus,
+    pub fill_index: u64,
+    pub principal: EventAsset,
+    pub collateral: EventAsset,
+    pub apy: u32,
+    pub duration: u32,
+    pub principal_amount: u64,
+    pub collateral_amount: u64,
+    pub interest: u64,
+    pub created_at: u64,
+    pub expired_at: u64,
+    pub updated_at: u64,
+    pub bump: u8,
+    pub collateral_account_bump: u8,
+    pub loan_type: LoanType,
+    pub extendable: u8,
+    pub extension_count: u8,
+    /// Principal paid down ahead of settlement. `principal_amount` stays the
+    /// amount originally disbursed, so a consumer wanting what is still owed
+    /// must read `principal_amount - repaid_principal + interest`.
+    pub repaid_principal: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
 pub struct LoanExtendabilityUpdated {
     pub loan: Address,
     pub extendable: u8,
@@ -775,6 +906,38 @@ impl LoanExtended {
 }
 
 #[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
+pub struct LoanExtendedV2 {
+    pub loan: LoanEventV2,
+    pub pubkey: Address,
+}
+
+impl LoanExtendedV2 {
+    /// Event discriminator.
+    pub const DISCRIMINATOR: [u8; 8] = [169, 169, 38, 187, 199, 247, 102, 11];
+}
+
+/// A principal paydown that left the loan open.
+///
+/// Carries the same `LoanEventV2` snapshot as the rest of the loan lifecycle, so
+/// a consumer can treat every loan event uniformly, plus the two figures a
+/// snapshot cannot express: what moved in *this* payment. Cumulative state lives
+/// on the snapshot as `repaid_principal`.
+#[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
+pub struct LoanPartiallyRepaid {
+    pub loan: LoanEventV2,
+    pub pubkey: Address,
+    /// Principal moved to the lender in this instruction.
+    pub amount: u64,
+    /// Collateral this payment freed. Always 0 for non-fungible collateral.
+    pub released_collateral: u64,
+}
+
+impl LoanPartiallyRepaid {
+    /// Event discriminator.
+    pub const DISCRIMINATOR: [u8; 8] = [74, 42, 141, 88, 45, 115, 84, 92];
+}
+
+#[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
 pub struct LoanRepaid {
     pub loan: LoanEventV0,
     pub pubkey: Address,
@@ -794,6 +957,17 @@ pub struct LoanRepaidV1 {
 impl LoanRepaidV1 {
     /// Event discriminator.
     pub const DISCRIMINATOR: [u8; 8] = [68, 118, 134, 24, 25, 250, 199, 187];
+}
+
+#[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
+pub struct LoanRepaidV2 {
+    pub loan: LoanEventV2,
+    pub pubkey: Address,
+}
+
+impl LoanRepaidV2 {
+    /// Event discriminator.
+    pub const DISCRIMINATOR: [u8; 8] = [26, 210, 149, 115, 51, 131, 188, 17];
 }
 
 #[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
@@ -852,6 +1026,9 @@ pub struct NftCollateralOfferParams {
     pub duration: u32,
     pub expiry: u32,
     pub allow_extend: bool,
+    /// When set, only this wallet may fill the offer (a private offer).
+    /// `None` leaves the offer public.
+    pub whitelisted_taker: Option<Address>,
 }
 
 #[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
@@ -861,6 +1038,9 @@ pub struct NftPrincipalOfferParams {
     pub duration: u32,
     pub expiry: u32,
     pub allow_extend: bool,
+    /// When set, only this wallet may fill the offer (a private offer).
+    /// `None` leaves the offer public.
+    pub whitelisted_taker: Option<Address>,
 }
 
 #[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
@@ -897,7 +1077,8 @@ pub struct Offer {
     pub allow_extend: u8,
     pub _padding6: [u8; 5],
     pub countered_offer: Address,
-    pub _reserved: [u8; 232],
+    pub whitelisted_taker: Address,
+    pub _reserved: [u8; 200],
 }
 
 impl Offer {
@@ -948,6 +1129,17 @@ impl OfferCancelledV2 {
 }
 
 #[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
+pub struct OfferCancelledV3 {
+    pub offer: OfferEventV3,
+    pub pubkey: Address,
+}
+
+impl OfferCancelledV3 {
+    /// Event discriminator.
+    pub const DISCRIMINATOR: [u8; 8] = [77, 139, 229, 133, 170, 5, 32, 60];
+}
+
+#[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
 pub struct OfferCreated {
     pub offer: OfferEventV0,
     pub pubkey: Address,
@@ -980,8 +1172,19 @@ impl OfferCreatedV2 {
     pub const DISCRIMINATOR: [u8; 8] = [107, 228, 58, 148, 11, 235, 232, 181];
 }
 
+#[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
+pub struct OfferCreatedV3 {
+    pub offer: OfferEventV3,
+    pub pubkey: Address,
+}
+
+impl OfferCreatedV3 {
+    /// Event discriminator.
+    pub const DISCRIMINATOR: [u8; 8] = [26, 130, 148, 22, 100, 155, 80, 139];
+}
+
 /// Frozen pre-counter-offers offer event schema. Kept in the IDL so historical
-/// events remain parseable; not emitted by current code (see `OfferEventV2`).
+/// events remain parseable; not emitted by current code (see `OfferEventV3`).
 #[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
 pub struct OfferEventV0 {
     pub creator: Address,
@@ -1006,7 +1209,7 @@ pub struct OfferEventV0 {
 }
 
 /// Frozen pre-extension offer event schema. Kept in the IDL so historical
-/// events remain parseable; not emitted by current code (see `OfferEventV2`).
+/// events remain parseable; not emitted by current code (see `OfferEventV3`).
 #[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
 pub struct OfferEventV1 {
     pub creator: Address,
@@ -1031,6 +1234,8 @@ pub struct OfferEventV1 {
     pub countered_offer: Address,
 }
 
+/// Frozen pre-private-offer event schema. Kept in the IDL so historical
+/// events remain parseable; not emitted by current code (see `OfferEventV3`).
 #[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
 pub struct OfferEventV2 {
     pub creator: Address,
@@ -1054,6 +1259,34 @@ pub struct OfferEventV2 {
     pub bump: u8,
     pub countered_offer: Address,
     pub allow_extend: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
+pub struct OfferEventV3 {
+    pub creator: Address,
+    pub side: OfferSide,
+    pub status: OfferStatus,
+    pub principal: EventAsset,
+    pub collateral: EventAsset,
+    pub filter: EventAssetFilter,
+    pub principal_amount: u64,
+    pub remaining_principal: u64,
+    pub collateral_amount: u64,
+    pub remaining_collateral: u64,
+    pub apy: u32,
+    pub duration: u32,
+    pub created_at: u64,
+    pub expired_at: u64,
+    pub updated_at: u64,
+    pub min_fill_amount: u64,
+    pub fill_counter: u64,
+    pub allow_partial_fill: u8,
+    pub bump: u8,
+    pub countered_offer: Address,
+    pub allow_extend: u8,
+    /// Pubkey::default() for public offers, otherwise the only wallet allowed
+    /// to fill this offer.
+    pub whitelisted_taker: Address,
 }
 
 #[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
@@ -1087,6 +1320,17 @@ pub struct OfferFilledV2 {
 impl OfferFilledV2 {
     /// Event discriminator.
     pub const DISCRIMINATOR: [u8; 8] = [140, 79, 66, 108, 81, 186, 66, 29];
+}
+
+#[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
+pub struct OfferFilledV3 {
+    pub offer: OfferEventV3,
+    pub pubkey: Address,
+}
+
+impl OfferFilledV3 {
+    /// Event discriminator.
+    pub const DISCRIMINATOR: [u8; 8] = [188, 254, 169, 22, 205, 13, 79, 202];
 }
 
 #[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
@@ -1174,6 +1418,9 @@ pub struct TokenCollateralOfferParams {
     pub allow_partial_fill: bool,
     pub min_fill_amount: u64,
     pub allow_extend: bool,
+    /// When set, only this wallet may fill the offer (a private offer).
+    /// `None` leaves the offer public.
+    pub whitelisted_taker: Option<Address>,
 }
 
 #[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
@@ -1186,6 +1433,16 @@ pub struct TokenPrincipalOfferParams {
     pub allow_partial_fill: bool,
     pub min_fill_amount: u64,
     pub allow_extend: bool,
+    /// When set, only this wallet may fill the offer (a private offer).
+    /// `None` leaves the offer public.
+    pub whitelisted_taker: Option<Address>,
+}
+
+#[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
+pub enum UpdateAuthority {
+    None,
+    Address(Address),
+    Collection(Address),
 }
 
 #[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
@@ -1206,6 +1463,13 @@ pub enum UpdateConfigAction {
     SetMaxApy { max_apy: u32 },
     SetMaxDuration { max_duration: u32 },
     SetMaxExpiry { max_expiry: u32 },
+    SetOperator { operator: Address },
+}
+
+#[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
+pub enum UpdateYieldMarketAction {
+    SetPaused { paused: bool },
+    UpdateAccounts { params: YieldMarketParams },
 }
 
 #[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
@@ -1221,7 +1485,8 @@ pub struct User {
     pub updated_at: u64,
     pub created_at: u64,
     pub bump: u8,
-    pub _padding: [u8; 7],
+    pub flags: u8,
+    pub _padding: [u8; 6],
     pub _reserved: [u8; 64],
 }
 
@@ -1237,4 +1502,72 @@ impl User {
         let payload = data.strip_prefix(Self::DISCRIMINATOR.as_slice())?;
         wincode::config::deserialize(payload, crate::BorshConfig::new()).ok()
     }
+}
+
+#[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
+pub struct YieldEnabledUpdated {
+    pub user: Address,
+    pub enabled: bool,
+    pub timestamp: u64,
+}
+
+impl YieldEnabledUpdated {
+    /// Event discriminator.
+    pub const DISCRIMINATOR: [u8; 8] = [67, 28, 209, 65, 58, 56, 84, 26];
+}
+
+/// Admin-managed registry of the Jupiter Lend Earn market backing escrow yield
+/// for one underlying mint.
+///
+/// Every account handed to a JupLend CPI is validated by equality against this
+/// registry, so a transaction builder can never point the program at a hostile
+/// market or mint. Program IDs are stored rather than hardcoded so the same
+/// build works against devnet and mainnet deployments of JupLend.
+#[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
+pub struct YieldMarket {
+    pub mint: Address,
+    pub jl_mint: Address,
+    pub lending_program: Address,
+    pub liquidity_program: Address,
+    pub lending_admin: Address,
+    pub lending: Address,
+    pub supply_token_reserves_liquidity: Address,
+    pub lending_supply_position_on_liquidity: Address,
+    pub rate_model: Address,
+    pub rewards_rate_model: Address,
+    pub vault: Address,
+    pub liquidity: Address,
+    pub paused: u8,
+    pub bump: u8,
+    pub _padding: [u8; 6],
+    pub _reserved: [u8; 64],
+}
+
+impl YieldMarket {
+    /// On-chain account discriminator.
+    pub const DISCRIMINATOR: [u8; 8] = [140, 119, 210, 6, 237, 21, 244, 227];
+
+    /// Verify the discriminator and deserialize the account data.
+    ///
+    /// Returns `None` if the discriminator does not match or the payload
+    /// fails to decode.
+    pub fn from_account_data(data: &[u8]) -> Option<Self> {
+        let payload = data.strip_prefix(Self::DISCRIMINATOR.as_slice())?;
+        wincode::config::deserialize(payload, crate::BorshConfig::new()).ok()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
+pub struct YieldMarketParams {
+    pub jl_mint: Address,
+    pub lending_program: Address,
+    pub liquidity_program: Address,
+    pub lending_admin: Address,
+    pub lending: Address,
+    pub supply_token_reserves_liquidity: Address,
+    pub lending_supply_position_on_liquidity: Address,
+    pub rate_model: Address,
+    pub rewards_rate_model: Address,
+    pub vault: Address,
+    pub liquidity: Address,
 }

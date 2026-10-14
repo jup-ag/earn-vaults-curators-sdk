@@ -204,7 +204,11 @@ impl {{ ty.name }} {
     /// Returns `None` if the payload fails to decode.
 {%- endif %}
     pub fn from_account_data(data: &[u8]) -> Option<Self> {
-{%- if ty.has_discriminator %}
+{%- if ty.discriminator_is_field %}
+        // The discriminator is the struct's key field, not a separate prefix.
+        data.strip_prefix(Self::DISCRIMINATOR.as_slice())?;
+        let payload = data;
+{%- else if ty.has_discriminator %}
         let payload = data.strip_prefix(Self::DISCRIMINATOR.as_slice())?;
 {%- else %}
         let payload = data;

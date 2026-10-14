@@ -18,9 +18,7 @@ pub use solana_instruction;
 pub use wincode;
 
 pub mod prelude {
-    pub use crate::instructions::*;
-    pub use crate::state::*;
-    pub use crate::ID;
+    pub use crate::{instructions, state, ID};
 }
 
 use solana_address::Address;
@@ -68,4 +66,3 @@ where
 {
     wincode::config::serialized_size(value, BorshConfig::new())
 }
-
