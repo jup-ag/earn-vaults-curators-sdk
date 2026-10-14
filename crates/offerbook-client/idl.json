@@ -515,7 +515,11 @@
             "the signer, still fillable (Active or PartiallyFilled), and for the",
             "same principal token. The collateral asset is carried in the IX",
             "params rather than as an account, so collateral-side consistency",
-            "isn't enforceable at the constraint level.",
+            "is enforced in the handler instead of at the constraint level: when",
+            "the countered offer names a concrete collateral asset, the counter",
+            "must match it. Filter-based offers (Asset::None collateral) accept",
+            "any matching NFT; membership cannot be proven at creation time and",
+            "remains a fill-time / client-side concern.",
             "When absent, the field stays at Pubkey::default()."
           ],
           "optional": true
@@ -655,7 +659,8 @@
             "the signer, still fillable (Active or PartiallyFilled), and for the",
             "same principal token. The collateral asset is carried in the IX",
             "params rather than as an account, so collateral-side consistency",
-            "isn't enforceable at the constraint level.",
+            "is enforced in the handler instead of at the constraint level: the",
+            "counter must name the countered offer's exact collateral asset.",
             "When absent, the field stays at Pubkey::default()."
           ],
           "optional": true
@@ -1051,6 +1056,93 @@
       "args": []
     },
     {
+      "name": "create_yield_market",
+      "discriminator": [
+        79,
+        187,
+        205,
+        88,
+        169,
+        101,
+        193,
+        252
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "yield_market",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  121,
+                  105,
+                  101,
+                  108,
+                  100,
+                  95,
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "mint"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "params",
+          "type": {
+            "defined": {
+              "name": "YieldMarketParams"
+            }
+          }
+        }
+      ]
+    },
+    {
       "name": "escrow_classic_nft_deposit",
       "discriminator": [
         148,
@@ -1210,7 +1302,8 @@
           "signer": true
         },
         {
-          "name": "signer_nft_token_account"
+          "name": "signer_nft_token_account",
+          "writable": true
         },
         {
           "name": "signer_user"
@@ -1728,7 +1821,14 @@
           "name": "program"
         }
       ],
-      "args": []
+      "args": [
+        {
+          "name": "authorization_data",
+          "type": {
+            "option": "bytes"
+          }
+        }
+      ]
     },
     {
       "name": "escrow_token_deposit",
@@ -1936,6 +2036,952 @@
       "args": [
         {
           "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "escrow_yield_deposit",
+      "discriminator": [
+        207,
+        53,
+        231,
+        252,
+        218,
+        235,
+        225,
+        15
+      ],
+      "accounts": [
+        {
+          "name": "signer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "docs": [
+            "Only the deposit honours the global pause: pushing funds into an",
+            "external protocol must stop in an emergency, while the withdraw paths",
+            "stay ungated so exits always work."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "user",
+          "docs": [
+            "The user whose escrow is compounded. Marked `mut` because the JupLend",
+            "CPI signs with this PDA as a writable signer."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  117,
+                  115,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "user"
+              }
+            ]
+          }
+        },
+        {
+          "name": "yield_market",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  121,
+                  105,
+                  101,
+                  108,
+                  100,
+                  95,
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "mint"
+        },
+        {
+          "name": "jl_mint",
+          "writable": true
+        },
+        {
+          "name": "user_escrow_token_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "user"
+              },
+              {
+                "kind": "account",
+                "path": "token_program"
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "user_jl_token_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "user"
+              },
+              {
+                "kind": "account",
+                "path": "token_program"
+              },
+              {
+                "kind": "account",
+                "path": "jl_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "lending_admin"
+        },
+        {
+          "name": "lending",
+          "writable": true
+        },
+        {
+          "name": "supply_token_reserves_liquidity",
+          "writable": true
+        },
+        {
+          "name": "lending_supply_position_on_liquidity",
+          "writable": true
+        },
+        {
+          "name": "rate_model"
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "liquidity",
+          "writable": true
+        },
+        {
+          "name": "rewards_rate_model"
+        },
+        {
+          "name": "lending_program"
+        },
+        {
+          "name": "liquidity_program"
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "event_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  95,
+                  95,
+                  101,
+                  118,
+                  101,
+                  110,
+                  116,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "escrow_yield_withdraw",
+      "discriminator": [
+        194,
+        41,
+        186,
+        176,
+        7,
+        77,
+        171,
+        138
+      ],
+      "accounts": [
+        {
+          "name": "signer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "user",
+          "docs": [
+            "The user whose escrow is topped up. Marked `mut` because the JupLend",
+            "CPI signs with this PDA as a writable signer."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  117,
+                  115,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "user"
+              }
+            ]
+          }
+        },
+        {
+          "name": "yield_market",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  121,
+                  105,
+                  101,
+                  108,
+                  100,
+                  95,
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "mint"
+        },
+        {
+          "name": "jl_mint",
+          "writable": true
+        },
+        {
+          "name": "user_escrow_token_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "user"
+              },
+              {
+                "kind": "account",
+                "path": "token_program"
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "user_jl_token_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "user"
+              },
+              {
+                "kind": "account",
+                "path": "token_program"
+              },
+              {
+                "kind": "account",
+                "path": "jl_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "claim_account",
+          "docs": [
+            "enforced by the seeds below, created via CPI on first use"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  117,
+                  115,
+                  101,
+                  114,
+                  95,
+                  99,
+                  108,
+                  97,
+                  105,
+                  109
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "user"
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ],
+            "program": {
+              "kind": "account",
+              "path": "liquidity_program"
+            }
+          }
+        },
+        {
+          "name": "lending_admin"
+        },
+        {
+          "name": "lending",
+          "writable": true
+        },
+        {
+          "name": "supply_token_reserves_liquidity",
+          "writable": true
+        },
+        {
+          "name": "lending_supply_position_on_liquidity",
+          "writable": true
+        },
+        {
+          "name": "rate_model"
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "liquidity",
+          "writable": true
+        },
+        {
+          "name": "rewards_rate_model"
+        },
+        {
+          "name": "lending_program"
+        },
+        {
+          "name": "liquidity_program"
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "event_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  95,
+                  95,
+                  101,
+                  118,
+                  101,
+                  110,
+                  116,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": [
+        {
+          "name": "required_amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "escrow_yield_withdraw_all",
+      "discriminator": [
+        13,
+        59,
+        100,
+        64,
+        169,
+        220,
+        56,
+        145
+      ],
+      "accounts": [
+        {
+          "name": "signer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "signer_user",
+          "docs": [
+            "Marked `mut` because the JupLend CPI signs with this PDA as a writable",
+            "signer."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  117,
+                  115,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "signer"
+              }
+            ]
+          }
+        },
+        {
+          "name": "yield_market",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  121,
+                  105,
+                  101,
+                  108,
+                  100,
+                  95,
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "mint"
+        },
+        {
+          "name": "jl_mint",
+          "writable": true
+        },
+        {
+          "name": "user_escrow_token_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "signer_user"
+              },
+              {
+                "kind": "account",
+                "path": "token_program"
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "user_jl_token_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "signer_user"
+              },
+              {
+                "kind": "account",
+                "path": "token_program"
+              },
+              {
+                "kind": "account",
+                "path": "jl_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "claim_account",
+          "docs": [
+            "enforced by the seeds below, created via CPI on first use"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  117,
+                  115,
+                  101,
+                  114,
+                  95,
+                  99,
+                  108,
+                  97,
+                  105,
+                  109
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "signer_user"
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ],
+            "program": {
+              "kind": "account",
+              "path": "liquidity_program"
+            }
+          }
+        },
+        {
+          "name": "lending_admin"
+        },
+        {
+          "name": "lending",
+          "writable": true
+        },
+        {
+          "name": "supply_token_reserves_liquidity",
+          "writable": true
+        },
+        {
+          "name": "lending_supply_position_on_liquidity",
+          "writable": true
+        },
+        {
+          "name": "rate_model"
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "liquidity",
+          "writable": true
+        },
+        {
+          "name": "rewards_rate_model"
+        },
+        {
+          "name": "lending_program"
+        },
+        {
+          "name": "liquidity_program"
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "event_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  95,
+                  95,
+                  101,
+                  118,
+                  101,
+                  110,
+                  116,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": [
+        {
+          "name": "min_amount_out",
           "type": "u64"
         }
       ]
@@ -3393,6 +4439,10 @@
     },
     {
       "name": "repay_non_fungible_loan",
+      "docs": [
+        "`amount: None` settles the loan; `Some(x)` pays down `x` of the principal",
+        "and leaves it running, with the collateral still locked."
+      ],
       "discriminator": [
         148,
         211,
@@ -3617,10 +4667,21 @@
           "name": "program"
         }
       ],
-      "args": []
+      "args": [
+        {
+          "name": "amount",
+          "type": {
+            "option": "u64"
+          }
+        }
+      ]
     },
     {
       "name": "repay_token_loan",
+      "docs": [
+        "`amount: None` settles the loan; `Some(x)` pays down `x` of the principal",
+        "and leaves it running."
+      ],
       "discriminator": [
         208,
         50,
@@ -3901,7 +4962,14 @@
           "name": "program"
         }
       ],
-      "args": []
+      "args": [
+        {
+          "name": "amount",
+          "type": {
+            "option": "u64"
+          }
+        }
+      ]
     },
     {
       "name": "set_loan_extendable",
@@ -3965,6 +5033,84 @@
       ]
     },
     {
+      "name": "set_yield_enabled",
+      "discriminator": [
+        110,
+        239,
+        153,
+        83,
+        80,
+        53,
+        223,
+        16
+      ],
+      "accounts": [
+        {
+          "name": "signer",
+          "signer": true
+        },
+        {
+          "name": "signer_user",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  117,
+                  115,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "signer"
+              }
+            ]
+          }
+        },
+        {
+          "name": "event_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  95,
+                  95,
+                  101,
+                  118,
+                  101,
+                  110,
+                  116,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": [
+        {
+          "name": "enabled",
+          "type": "bool"
+        }
+      ]
+    },
+    {
       "name": "update_config",
       "discriminator": [
         29,
@@ -3999,9 +5145,94 @@
           }
         }
       ]
+    },
+    {
+      "name": "update_yield_market",
+      "discriminator": [
+        104,
+        236,
+        82,
+        238,
+        56,
+        49,
+        132,
+        152
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "yield_market",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  121,
+                  105,
+                  101,
+                  108,
+                  100,
+                  95,
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "yield_market"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "action",
+          "type": {
+            "defined": {
+              "name": "UpdateYieldMarketAction"
+            }
+          }
+        }
+      ]
     }
   ],
   "accounts": [
+    {
+      "name": "BaseAssetV1",
+      "discriminator": [
+        1
+      ]
+    },
     {
       "name": "Config",
       "discriminator": [
@@ -4053,6 +5284,19 @@
         58,
         236
       ]
+    },
+    {
+      "name": "YieldMarket",
+      "discriminator": [
+        140,
+        119,
+        210,
+        6,
+        237,
+        21,
+        244,
+        227
+      ]
     }
   ],
   "events": [
@@ -4083,6 +5327,32 @@
       ]
     },
     {
+      "name": "EscrowYieldDeposit",
+      "discriminator": [
+        99,
+        64,
+        76,
+        21,
+        60,
+        72,
+        42,
+        99
+      ]
+    },
+    {
+      "name": "EscrowYieldWithdraw",
+      "discriminator": [
+        41,
+        207,
+        38,
+        204,
+        174,
+        105,
+        122,
+        104
+      ]
+    },
+    {
       "name": "LoanCreated",
       "discriminator": [
         142,
@@ -4106,6 +5376,19 @@
         71,
         214,
         128
+      ]
+    },
+    {
+      "name": "LoanCreatedV2",
+      "discriminator": [
+        116,
+        244,
+        185,
+        253,
+        208,
+        104,
+        112,
+        135
       ]
     },
     {
@@ -4135,6 +5418,19 @@
       ]
     },
     {
+      "name": "LoanDefaultedV2",
+      "discriminator": [
+        80,
+        77,
+        48,
+        94,
+        217,
+        75,
+        184,
+        167
+      ]
+    },
+    {
       "name": "LoanExtendabilityUpdated",
       "discriminator": [
         132,
@@ -4161,6 +5457,32 @@
       ]
     },
     {
+      "name": "LoanExtendedV2",
+      "discriminator": [
+        169,
+        169,
+        38,
+        187,
+        199,
+        247,
+        102,
+        11
+      ]
+    },
+    {
+      "name": "LoanPartiallyRepaid",
+      "discriminator": [
+        74,
+        42,
+        141,
+        88,
+        45,
+        115,
+        84,
+        92
+      ]
+    },
+    {
       "name": "LoanRepaid",
       "discriminator": [
         202,
@@ -4184,6 +5506,19 @@
         250,
         199,
         187
+      ]
+    },
+    {
+      "name": "LoanRepaidV2",
+      "discriminator": [
+        26,
+        210,
+        149,
+        115,
+        51,
+        131,
+        188,
+        17
       ]
     },
     {
@@ -4226,6 +5561,19 @@
       ]
     },
     {
+      "name": "OfferCancelledV3",
+      "discriminator": [
+        77,
+        139,
+        229,
+        133,
+        170,
+        5,
+        32,
+        60
+      ]
+    },
+    {
       "name": "OfferCreated",
       "discriminator": [
         31,
@@ -4262,6 +5610,19 @@
         235,
         232,
         181
+      ]
+    },
+    {
+      "name": "OfferCreatedV3",
+      "discriminator": [
+        26,
+        130,
+        148,
+        22,
+        100,
+        155,
+        80,
+        139
       ]
     },
     {
@@ -4304,6 +5665,19 @@
       ]
     },
     {
+      "name": "OfferFilledV3",
+      "discriminator": [
+        188,
+        254,
+        169,
+        22,
+        205,
+        13,
+        79,
+        202
+      ]
+    },
+    {
       "name": "ProtocolFee",
       "discriminator": [
         152,
@@ -4340,6 +5714,19 @@
         85,
         219,
         99
+      ]
+    },
+    {
+      "name": "YieldEnabledUpdated",
+      "discriminator": [
+        67,
+        28,
+        209,
+        65,
+        58,
+        56,
+        84,
+        26
       ]
     }
   ],
@@ -4473,6 +5860,56 @@
       "code": 6025,
       "name": "LoanDue",
       "msg": "Loan is due"
+    },
+    {
+      "code": 6026,
+      "name": "InvalidRepayAmount",
+      "msg": "Invalid Repay Amount"
+    },
+    {
+      "code": 6027,
+      "name": "UnauthorizedTaker",
+      "msg": "Unauthorized Taker"
+    },
+    {
+      "code": 6028,
+      "name": "YieldMarketPaused",
+      "msg": "Yield Market Paused"
+    },
+    {
+      "code": 6029,
+      "name": "YieldNotEnabled",
+      "msg": "Yield Not Enabled"
+    },
+    {
+      "code": 6030,
+      "name": "InvalidYieldAccount",
+      "msg": "Invalid Yield Account"
+    },
+    {
+      "code": 6031,
+      "name": "NothingToCompound",
+      "msg": "Nothing To Compound"
+    },
+    {
+      "code": 6032,
+      "name": "OperatorUnset",
+      "msg": "Operator Unset"
+    },
+    {
+      "code": 6033,
+      "name": "YieldWithdrawShortfall",
+      "msg": "Yield Withdraw Did Not Deliver"
+    },
+    {
+      "code": 6034,
+      "name": "ImmutableYieldMarketField",
+      "msg": "Immutable Yield Market Field"
+    },
+    {
+      "code": 6035,
+      "name": "YieldDepositNoShares",
+      "msg": "Yield Deposit Returned No Shares"
     }
   ],
   "types": [
@@ -4582,6 +6019,48 @@
       }
     },
     {
+      "name": "BaseAssetV1",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "key",
+            "type": {
+              "defined": {
+                "name": "Key"
+              }
+            }
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "update_authority",
+            "type": {
+              "defined": {
+                "name": "UpdateAuthority"
+              }
+            }
+          },
+          {
+            "name": "name",
+            "type": "string"
+          },
+          {
+            "name": "uri",
+            "type": "string"
+          },
+          {
+            "name": "seq",
+            "type": {
+              "option": "u64"
+            }
+          }
+        ]
+      }
+    },
+    {
       "name": "ClassicNftAsset",
       "repr": {
         "kind": "c"
@@ -4659,7 +6138,7 @@
     },
     {
       "name": "Config",
-      "serialization": "borsh",
+      "serialization": "bytemuck",
       "repr": {
         "kind": "c"
       },
@@ -4766,11 +6245,15 @@
             }
           },
           {
+            "name": "operator",
+            "type": "pubkey"
+          },
+          {
             "name": "_reserved",
             "type": {
               "array": [
                 "u8",
-                400
+                368
               ]
             }
           }
@@ -4852,6 +6335,96 @@
           },
           {
             "name": "withdraw_amount",
+            "type": "u64"
+          },
+          {
+            "name": "total_amount",
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "EscrowYieldDeposit",
+      "docs": [
+        "Idle escrow tokens were compounded into the Jupiter Lend market",
+        "(`escrow_yield_deposit`). Raw-escrow events (`EscrowDeposit` /",
+        "`EscrowWithdraw`) keep their meaning untouched; the yield position is",
+        "reconstructable from these events alone."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "user",
+            "type": "pubkey"
+          },
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "jl_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "share_amount",
+            "type": "u64"
+          },
+          {
+            "name": "total_share_amount",
+            "type": "u64"
+          },
+          {
+            "name": "total_amount",
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "EscrowYieldWithdraw",
+      "docs": [
+        "Tokens were redeemed from the Jupiter Lend market back into the raw escrow",
+        "(`escrow_yield_withdraw` shortfall top-up or `escrow_yield_withdraw_all`)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "user",
+            "type": "pubkey"
+          },
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "jl_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "share_amount",
+            "type": "u64"
+          },
+          {
+            "name": "total_share_amount",
             "type": "u64"
           },
           {
@@ -5183,8 +6756,34 @@
       }
     },
     {
+      "name": "Key",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Uninitialized"
+          },
+          {
+            "name": "AssetV1"
+          },
+          {
+            "name": "HashedAssetV1"
+          },
+          {
+            "name": "PluginHeaderV1"
+          },
+          {
+            "name": "PluginRegistryV1"
+          },
+          {
+            "name": "CollectionV1"
+          }
+        ]
+      }
+    },
+    {
       "name": "Loan",
-      "serialization": "borsh",
+      "serialization": "bytemuck",
       "repr": {
         "kind": "c"
       },
@@ -5328,11 +6927,15 @@
             }
           },
           {
+            "name": "repaid_principal",
+            "type": "u64"
+          },
+          {
             "name": "_reserved",
             "type": {
               "array": [
                 "u8",
-                48
+                40
               ]
             }
           }
@@ -5380,6 +6983,26 @@
       }
     },
     {
+      "name": "LoanCreatedV2",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "loan",
+            "type": {
+              "defined": {
+                "name": "LoanEventV2"
+              }
+            }
+          },
+          {
+            "name": "pubkey",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
       "name": "LoanDefaulted",
       "type": {
         "kind": "struct",
@@ -5409,6 +7032,26 @@
             "type": {
               "defined": {
                 "name": "LoanEventV1"
+              }
+            }
+          },
+          {
+            "name": "pubkey",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "LoanDefaultedV2",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "loan",
+            "type": {
+              "defined": {
+                "name": "LoanEventV2"
               }
             }
           },
@@ -5525,6 +7168,10 @@
     },
     {
       "name": "LoanEventV1",
+      "docs": [
+        "Frozen pre-partial-repayment loan event schema. Kept in the IDL so historical",
+        "events remain parseable; not emitted by current code (see `LoanEventV2`)."
+      ],
       "type": {
         "kind": "struct",
         "fields": [
@@ -5632,6 +7279,123 @@
       }
     },
     {
+      "name": "LoanEventV2",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "lender",
+            "type": "pubkey"
+          },
+          {
+            "name": "borrower",
+            "type": "pubkey"
+          },
+          {
+            "name": "creator",
+            "type": "pubkey"
+          },
+          {
+            "name": "offer",
+            "type": "pubkey"
+          },
+          {
+            "name": "status",
+            "type": {
+              "defined": {
+                "name": "LoanStatus"
+              }
+            }
+          },
+          {
+            "name": "fill_index",
+            "type": "u64"
+          },
+          {
+            "name": "principal",
+            "type": {
+              "defined": {
+                "name": "EventAsset"
+              }
+            }
+          },
+          {
+            "name": "collateral",
+            "type": {
+              "defined": {
+                "name": "EventAsset"
+              }
+            }
+          },
+          {
+            "name": "apy",
+            "type": "u32"
+          },
+          {
+            "name": "duration",
+            "type": "u32"
+          },
+          {
+            "name": "principal_amount",
+            "type": "u64"
+          },
+          {
+            "name": "collateral_amount",
+            "type": "u64"
+          },
+          {
+            "name": "interest",
+            "type": "u64"
+          },
+          {
+            "name": "created_at",
+            "type": "u64"
+          },
+          {
+            "name": "expired_at",
+            "type": "u64"
+          },
+          {
+            "name": "updated_at",
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "collateral_account_bump",
+            "type": "u8"
+          },
+          {
+            "name": "loan_type",
+            "type": {
+              "defined": {
+                "name": "LoanType"
+              }
+            }
+          },
+          {
+            "name": "extendable",
+            "type": "u8"
+          },
+          {
+            "name": "extension_count",
+            "type": "u8"
+          },
+          {
+            "name": "repaid_principal",
+            "docs": [
+              "Principal paid down ahead of settlement. `principal_amount` stays the",
+              "amount originally disbursed, so a consumer wanting what is still owed",
+              "must read `principal_amount - repaid_principal + interest`."
+            ],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
       "name": "LoanExtendabilityUpdated",
       "type": {
         "kind": "struct",
@@ -5672,6 +7436,68 @@
       }
     },
     {
+      "name": "LoanExtendedV2",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "loan",
+            "type": {
+              "defined": {
+                "name": "LoanEventV2"
+              }
+            }
+          },
+          {
+            "name": "pubkey",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "LoanPartiallyRepaid",
+      "docs": [
+        "A principal paydown that left the loan open.",
+        "",
+        "Carries the same `LoanEventV2` snapshot as the rest of the loan lifecycle, so",
+        "a consumer can treat every loan event uniformly, plus the two figures a",
+        "snapshot cannot express: what moved in *this* payment. Cumulative state lives",
+        "on the snapshot as `repaid_principal`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "loan",
+            "type": {
+              "defined": {
+                "name": "LoanEventV2"
+              }
+            }
+          },
+          {
+            "name": "pubkey",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "docs": [
+              "Principal moved to the lender in this instruction."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "released_collateral",
+            "docs": [
+              "Collateral this payment freed. Always 0 for non-fungible collateral."
+            ],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
       "name": "LoanRepaid",
       "type": {
         "kind": "struct",
@@ -5701,6 +7527,26 @@
             "type": {
               "defined": {
                 "name": "LoanEventV1"
+              }
+            }
+          },
+          {
+            "name": "pubkey",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "LoanRepaidV2",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "loan",
+            "type": {
+              "defined": {
+                "name": "LoanEventV2"
               }
             }
           },
@@ -5876,6 +7722,16 @@
           {
             "name": "allow_extend",
             "type": "bool"
+          },
+          {
+            "name": "whitelisted_taker",
+            "docs": [
+              "When set, only this wallet may fill the offer (a private offer).",
+              "`None` leaves the offer public."
+            ],
+            "type": {
+              "option": "pubkey"
+            }
           }
         ]
       }
@@ -5904,6 +7760,16 @@
           {
             "name": "allow_extend",
             "type": "bool"
+          },
+          {
+            "name": "whitelisted_taker",
+            "docs": [
+              "When set, only this wallet may fill the offer (a private offer).",
+              "`None` leaves the offer public."
+            ],
+            "type": {
+              "option": "pubkey"
+            }
           }
         ]
       }
@@ -5930,7 +7796,7 @@
     },
     {
       "name": "Offer",
-      "serialization": "borsh",
+      "serialization": "bytemuck",
       "repr": {
         "kind": "c"
       },
@@ -6096,11 +7962,15 @@
             "type": "pubkey"
           },
           {
+            "name": "whitelisted_taker",
+            "type": "pubkey"
+          },
+          {
             "name": "_reserved",
             "type": {
               "array": [
                 "u8",
-                232
+                200
               ]
             }
           }
@@ -6157,6 +8027,26 @@
             "type": {
               "defined": {
                 "name": "OfferEventV2"
+              }
+            }
+          },
+          {
+            "name": "pubkey",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "OfferCancelledV3",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "offer",
+            "type": {
+              "defined": {
+                "name": "OfferEventV3"
               }
             }
           },
@@ -6228,10 +8118,30 @@
       }
     },
     {
+      "name": "OfferCreatedV3",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "offer",
+            "type": {
+              "defined": {
+                "name": "OfferEventV3"
+              }
+            }
+          },
+          {
+            "name": "pubkey",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
       "name": "OfferEventV0",
       "docs": [
         "Frozen pre-counter-offers offer event schema. Kept in the IDL so historical",
-        "events remain parseable; not emitted by current code (see `OfferEventV2`)."
+        "events remain parseable; not emitted by current code (see `OfferEventV3`)."
       ],
       "type": {
         "kind": "struct",
@@ -6339,7 +8249,7 @@
       "name": "OfferEventV1",
       "docs": [
         "Frozen pre-extension offer event schema. Kept in the IDL so historical",
-        "events remain parseable; not emitted by current code (see `OfferEventV2`)."
+        "events remain parseable; not emitted by current code (see `OfferEventV3`)."
       ],
       "type": {
         "kind": "struct",
@@ -6449,6 +8359,10 @@
     },
     {
       "name": "OfferEventV2",
+      "docs": [
+        "Frozen pre-private-offer event schema. Kept in the IDL so historical",
+        "events remain parseable; not emitted by current code (see `OfferEventV3`)."
+      ],
       "type": {
         "kind": "struct",
         "fields": [
@@ -6560,6 +8474,126 @@
       }
     },
     {
+      "name": "OfferEventV3",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "creator",
+            "type": "pubkey"
+          },
+          {
+            "name": "side",
+            "type": {
+              "defined": {
+                "name": "OfferSide"
+              }
+            }
+          },
+          {
+            "name": "status",
+            "type": {
+              "defined": {
+                "name": "OfferStatus"
+              }
+            }
+          },
+          {
+            "name": "principal",
+            "type": {
+              "defined": {
+                "name": "EventAsset"
+              }
+            }
+          },
+          {
+            "name": "collateral",
+            "type": {
+              "defined": {
+                "name": "EventAsset"
+              }
+            }
+          },
+          {
+            "name": "filter",
+            "type": {
+              "defined": {
+                "name": "EventAssetFilter"
+              }
+            }
+          },
+          {
+            "name": "principal_amount",
+            "type": "u64"
+          },
+          {
+            "name": "remaining_principal",
+            "type": "u64"
+          },
+          {
+            "name": "collateral_amount",
+            "type": "u64"
+          },
+          {
+            "name": "remaining_collateral",
+            "type": "u64"
+          },
+          {
+            "name": "apy",
+            "type": "u32"
+          },
+          {
+            "name": "duration",
+            "type": "u32"
+          },
+          {
+            "name": "created_at",
+            "type": "u64"
+          },
+          {
+            "name": "expired_at",
+            "type": "u64"
+          },
+          {
+            "name": "updated_at",
+            "type": "u64"
+          },
+          {
+            "name": "min_fill_amount",
+            "type": "u64"
+          },
+          {
+            "name": "fill_counter",
+            "type": "u64"
+          },
+          {
+            "name": "allow_partial_fill",
+            "type": "u8"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "countered_offer",
+            "type": "pubkey"
+          },
+          {
+            "name": "allow_extend",
+            "type": "u8"
+          },
+          {
+            "name": "whitelisted_taker",
+            "docs": [
+              "Pubkey::default() for public offers, otherwise the only wallet allowed",
+              "to fill this offer."
+            ],
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
       "name": "OfferFilled",
       "type": {
         "kind": "struct",
@@ -6609,6 +8643,26 @@
             "type": {
               "defined": {
                 "name": "OfferEventV2"
+              }
+            }
+          },
+          {
+            "name": "pubkey",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "OfferFilledV3",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "offer",
+            "type": {
+              "defined": {
+                "name": "OfferEventV3"
               }
             }
           },
@@ -6849,6 +8903,16 @@
           {
             "name": "allow_extend",
             "type": "bool"
+          },
+          {
+            "name": "whitelisted_taker",
+            "docs": [
+              "When set, only this wallet may fill the offer (a private offer).",
+              "`None` leaves the offer public."
+            ],
+            "type": {
+              "option": "pubkey"
+            }
           }
         ]
       }
@@ -6889,6 +8953,39 @@
           {
             "name": "allow_extend",
             "type": "bool"
+          },
+          {
+            "name": "whitelisted_taker",
+            "docs": [
+              "When set, only this wallet may fill the offer (a private offer).",
+              "`None` leaves the offer public."
+            ],
+            "type": {
+              "option": "pubkey"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "UpdateAuthority",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "None"
+          },
+          {
+            "name": "Address",
+            "fields": [
+              "pubkey"
+            ]
+          },
+          {
+            "name": "Collection",
+            "fields": [
+              "pubkey"
+            ]
           }
         ]
       }
@@ -7029,13 +9126,52 @@
                 "type": "u32"
               }
             ]
+          },
+          {
+            "name": "SetOperator",
+            "fields": [
+              {
+                "name": "operator",
+                "type": "pubkey"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "UpdateYieldMarketAction",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "SetPaused",
+            "fields": [
+              {
+                "name": "paused",
+                "type": "bool"
+              }
+            ]
+          },
+          {
+            "name": "UpdateAccounts",
+            "fields": [
+              {
+                "name": "params",
+                "type": {
+                  "defined": {
+                    "name": "YieldMarketParams"
+                  }
+                }
+              }
+            ]
           }
         ]
       }
     },
     {
       "name": "User",
-      "serialization": "borsh",
+      "serialization": "bytemuck",
       "repr": {
         "kind": "c"
       },
@@ -7087,11 +9223,15 @@
             "type": "u8"
           },
           {
+            "name": "flags",
+            "type": "u8"
+          },
+          {
             "name": "_padding",
             "type": {
               "array": [
                 "u8",
-                7
+                6
               ]
             }
           },
@@ -7103,6 +9243,173 @@
                 64
               ]
             }
+          }
+        ]
+      }
+    },
+    {
+      "name": "YieldEnabledUpdated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "user",
+            "type": "pubkey"
+          },
+          {
+            "name": "enabled",
+            "type": "bool"
+          },
+          {
+            "name": "timestamp",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "YieldMarket",
+      "docs": [
+        "Admin-managed registry of the Jupiter Lend Earn market backing escrow yield",
+        "for one underlying mint.",
+        "",
+        "Every account handed to a JupLend CPI is validated by equality against this",
+        "registry, so a transaction builder can never point the program at a hostile",
+        "market or mint. Program IDs are stored rather than hardcoded so the same",
+        "build works against devnet and mainnet deployments of JupLend."
+      ],
+      "serialization": "bytemuck",
+      "repr": {
+        "kind": "c"
+      },
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "jl_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "lending_program",
+            "type": "pubkey"
+          },
+          {
+            "name": "liquidity_program",
+            "type": "pubkey"
+          },
+          {
+            "name": "lending_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "lending",
+            "type": "pubkey"
+          },
+          {
+            "name": "supply_token_reserves_liquidity",
+            "type": "pubkey"
+          },
+          {
+            "name": "lending_supply_position_on_liquidity",
+            "type": "pubkey"
+          },
+          {
+            "name": "rate_model",
+            "type": "pubkey"
+          },
+          {
+            "name": "rewards_rate_model",
+            "type": "pubkey"
+          },
+          {
+            "name": "vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "liquidity",
+            "type": "pubkey"
+          },
+          {
+            "name": "paused",
+            "type": "u8"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "_padding",
+            "type": {
+              "array": [
+                "u8",
+                6
+              ]
+            }
+          },
+          {
+            "name": "_reserved",
+            "type": {
+              "array": [
+                "u8",
+                64
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "YieldMarketParams",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "jl_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "lending_program",
+            "type": "pubkey"
+          },
+          {
+            "name": "liquidity_program",
+            "type": "pubkey"
+          },
+          {
+            "name": "lending_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "lending",
+            "type": "pubkey"
+          },
+          {
+            "name": "supply_token_reserves_liquidity",
+            "type": "pubkey"
+          },
+          {
+            "name": "lending_supply_position_on_liquidity",
+            "type": "pubkey"
+          },
+          {
+            "name": "rate_model",
+            "type": "pubkey"
+          },
+          {
+            "name": "rewards_rate_model",
+            "type": "pubkey"
+          },
+          {
+            "name": "vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "liquidity",
+            "type": "pubkey"
           }
         ]
       }

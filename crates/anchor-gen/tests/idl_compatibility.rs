@@ -92,6 +92,16 @@ fn shank_accounts_decode_without_a_discriminator() {
 }
 
 #[test]
+fn core_asset_key_is_not_stripped() {
+    test_generated_client(
+        "core-fixture",
+        include_str!("../../offerbook-client/idl.json"),
+        &include_str!("../../offerbook-client/tests/core_asset.rs")
+            .replace("offerbook_client", "core_fixture"),
+    );
+}
+
+#[test]
 fn legacy_events_keep_payload_and_anchor_discriminators() {
     test_generated_client(
         "anchor-fixture",
@@ -100,7 +110,8 @@ fn legacy_events_keep_payload_and_anchor_discriminators() {
             {"name": "Vault", "type": {"kind": "struct", "fields": [
                 {"name": "amount", "type": "u64"}
             ]}},
-            {"name": "Counter", "discriminator": [9, 8]}
+            {"name": "Counter", "discriminator": [9, 8]},
+            {"name": "Tagged", "discriminator": [1]}
         ],
         "events": [
             {"name": "Deposited", "fields": [
@@ -111,6 +122,13 @@ fn legacy_events_keep_payload_and_anchor_discriminators() {
             {"name": "EmptyEvent", "fields": []}
         ],
         "types": [
+            {"name": "Key", "type": {"kind": "enum", "variants": [
+                {"name": "Uninitialized"}, {"name": "AssetV1"}
+            ]}},
+            {"name": "Tagged", "type": {"kind": "struct", "fields": [
+                {"name": "key", "type": {"defined": {"name": "Key"}}},
+                {"name": "value", "type": "u16"}
+            ]}},
             {"name": "Counter", "type": {"kind": "struct", "fields": [
                 {"name": "value", "type": "u16"}
             ]}},
@@ -148,6 +166,12 @@ fn legacy_events_keep_payload_and_anchor_discriminators() {
             assert_eq!(Counter::DISCRIMINATOR, [9, 8]);
             assert_eq!(Counter::from_account_data(&[9, 8, 1, 2]).unwrap().value, 513);
             assert!(Counter::from_account_data(&[9, 7, 1, 2]).is_none());
+            // A one-byte Anchor prefix is still separate, even with a key field.
+            let tagged = Tagged::from_account_data(&[1, 1, 1, 2]).unwrap();
+            assert_eq!(tagged.key, Key::AssetV1);
+            assert_eq!(tagged.value, 513);
+            assert!(Tagged::from_account_data(&[1, 1, 2]).is_none());
+            assert!(Tagged::from_account_data(&[0, 1, 1, 2]).is_none());
         }
     "#,
     );

@@ -256,7 +256,11 @@ pub struct CreateNftCollateralOfferAccounts {
     /// the signer, still fillable (Active or PartiallyFilled), and for the
     /// same principal token. The collateral asset is carried in the IX
     /// params rather than as an account, so collateral-side consistency
-    /// isn't enforceable at the constraint level.
+    /// is enforced in the handler instead of at the constraint level: when
+    /// the countered offer names a concrete collateral asset, the counter
+    /// must match it. Filter-based offers (Asset::None collateral) accept
+    /// any matching NFT; membership cannot be proven at creation time and
+    /// remains a fill-time / client-side concern.
     /// When absent, the field stays at Pubkey::default().
     pub countered_offer: Option<Address>,
     pub event_authority: Address,
@@ -340,7 +344,8 @@ pub struct CreateNftPrincipalOfferAccounts {
     /// the signer, still fillable (Active or PartiallyFilled), and for the
     /// same principal token. The collateral asset is carried in the IX
     /// params rather than as an account, so collateral-side consistency
-    /// isn't enforceable at the constraint level.
+    /// is enforced in the handler instead of at the constraint level: the
+    /// counter must name the countered offer's exact collateral asset.
     /// When absent, the field stays at Pubkey::default().
     pub countered_offer: Option<Address>,
     pub event_authority: Address,
@@ -631,6 +636,67 @@ impl CreateUser {
     }
 }
 
+/// Accounts for the `create_yield_market` instruction.
+#[derive(Debug, Clone)]
+pub struct CreateYieldMarketAccounts {
+    pub admin: Address,
+    pub config: Address,
+    pub yield_market: Address,
+    pub mint: Address,
+}
+
+impl CreateYieldMarketAccounts {
+    /// Build the account metas in the order expected by the program.
+    ///
+    /// Optional accounts default to the program ID when `None`, matching
+    /// the Anchor convention.
+    pub fn to_account_metas(&self) -> Vec<AccountMeta> {
+        vec![
+            AccountMeta::new(self.admin, true),
+            AccountMeta::new_readonly(self.config, false),
+            AccountMeta::new(self.yield_market, false),
+            AccountMeta::new_readonly(self.mint, false),
+            AccountMeta::new_readonly(
+                Address::from_str_const("11111111111111111111111111111111"),
+                false,
+            ),
+        ]
+    }
+}
+
+/// Arguments for the `create_yield_market` instruction.
+#[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
+pub struct CreateYieldMarketInstructionArgs {
+    pub params: crate::state::YieldMarketParams,
+}
+
+/// Builder for the `create_yield_market` instruction.
+pub struct CreateYieldMarket;
+
+impl CreateYieldMarket {
+    /// Instruction discriminator.
+    pub const DISCRIMINATOR: [u8; 8] = [79, 187, 205, 88, 169, 101, 193, 252];
+
+    /// Serialize the instruction data (discriminator + borsh-layout args).
+    pub fn data(args: &CreateYieldMarketInstructionArgs) -> Vec<u8> {
+        let mut data = Self::DISCRIMINATOR.to_vec();
+        data.extend_from_slice(&crate::serialize(args).expect("args serialization is infallible"));
+        data
+    }
+
+    /// Build the instruction.
+    pub fn instruction(
+        accounts: &CreateYieldMarketAccounts,
+        args: &CreateYieldMarketInstructionArgs,
+    ) -> Instruction {
+        Instruction {
+            program_id: ID,
+            accounts: accounts.to_account_metas(),
+            data: Self::data(args),
+        }
+    }
+}
+
 /// Accounts for the `escrow_classic_nft_deposit` instruction.
 #[derive(Debug, Clone)]
 pub struct EscrowClassicNftDepositAccounts {
@@ -722,7 +788,7 @@ impl EscrowClassicNftWithdrawAccounts {
     pub fn to_account_metas(&self) -> Vec<AccountMeta> {
         vec![
             AccountMeta::new(self.signer, true),
-            AccountMeta::new_readonly(self.signer_nft_token_account, false),
+            AccountMeta::new(self.signer_nft_token_account, false),
             AccountMeta::new_readonly(self.signer_user, false),
             AccountMeta::new_readonly(self.nft_mint, false),
             AccountMeta::new(self.user_escrow_token_account, false),
@@ -1017,6 +1083,12 @@ impl EscrowProgrammableNftWithdrawAccounts {
     }
 }
 
+/// Arguments for the `escrow_programmable_nft_withdraw` instruction.
+#[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
+pub struct EscrowProgrammableNftWithdrawInstructionArgs {
+    pub authorization_data: Option<Vec<u8>>,
+}
+
 /// Builder for the `escrow_programmable_nft_withdraw` instruction.
 pub struct EscrowProgrammableNftWithdraw;
 
@@ -1024,17 +1096,22 @@ impl EscrowProgrammableNftWithdraw {
     /// Instruction discriminator.
     pub const DISCRIMINATOR: [u8; 8] = [28, 157, 21, 234, 59, 222, 170, 178];
 
-    /// Serialize the instruction data (discriminator only).
-    pub fn data() -> Vec<u8> {
-        Self::DISCRIMINATOR.to_vec()
+    /// Serialize the instruction data (discriminator + borsh-layout args).
+    pub fn data(args: &EscrowProgrammableNftWithdrawInstructionArgs) -> Vec<u8> {
+        let mut data = Self::DISCRIMINATOR.to_vec();
+        data.extend_from_slice(&crate::serialize(args).expect("args serialization is infallible"));
+        data
     }
 
     /// Build the instruction.
-    pub fn instruction(accounts: &EscrowProgrammableNftWithdrawAccounts) -> Instruction {
+    pub fn instruction(
+        accounts: &EscrowProgrammableNftWithdrawAccounts,
+        args: &EscrowProgrammableNftWithdrawInstructionArgs,
+    ) -> Instruction {
         Instruction {
             program_id: ID,
             accounts: accounts.to_account_metas(),
-            data: Self::data(),
+            data: Self::data(args),
         }
     }
 }
@@ -1168,6 +1245,305 @@ impl EscrowTokenWithdraw {
     pub fn instruction(
         accounts: &EscrowTokenWithdrawAccounts,
         args: &EscrowTokenWithdrawInstructionArgs,
+    ) -> Instruction {
+        Instruction {
+            program_id: ID,
+            accounts: accounts.to_account_metas(),
+            data: Self::data(args),
+        }
+    }
+}
+
+/// Accounts for the `escrow_yield_deposit` instruction.
+#[derive(Debug, Clone)]
+pub struct EscrowYieldDepositAccounts {
+    pub signer: Address,
+    /// Only the deposit honours the global pause: pushing funds into an
+    /// external protocol must stop in an emergency, while the withdraw paths
+    /// stay ungated so exits always work.
+    pub config: Address,
+    /// The user whose escrow is compounded. Marked `mut` because the JupLend
+    /// CPI signs with this PDA as a writable signer.
+    pub user: Address,
+    pub yield_market: Address,
+    pub mint: Address,
+    pub jl_mint: Address,
+    pub user_escrow_token_account: Address,
+    pub user_jl_token_account: Address,
+    pub lending_admin: Address,
+    pub lending: Address,
+    pub supply_token_reserves_liquidity: Address,
+    pub lending_supply_position_on_liquidity: Address,
+    pub rate_model: Address,
+    pub vault: Address,
+    pub liquidity: Address,
+    pub rewards_rate_model: Address,
+    pub lending_program: Address,
+    pub liquidity_program: Address,
+    pub token_program: Address,
+    pub event_authority: Address,
+    pub program: Address,
+}
+
+impl EscrowYieldDepositAccounts {
+    /// Build the account metas in the order expected by the program.
+    ///
+    /// Optional accounts default to the program ID when `None`, matching
+    /// the Anchor convention.
+    pub fn to_account_metas(&self) -> Vec<AccountMeta> {
+        vec![
+            AccountMeta::new(self.signer, true),
+            AccountMeta::new_readonly(self.config, false),
+            AccountMeta::new(self.user, false),
+            AccountMeta::new_readonly(self.yield_market, false),
+            AccountMeta::new_readonly(self.mint, false),
+            AccountMeta::new(self.jl_mint, false),
+            AccountMeta::new(self.user_escrow_token_account, false),
+            AccountMeta::new(self.user_jl_token_account, false),
+            AccountMeta::new_readonly(self.lending_admin, false),
+            AccountMeta::new(self.lending, false),
+            AccountMeta::new(self.supply_token_reserves_liquidity, false),
+            AccountMeta::new(self.lending_supply_position_on_liquidity, false),
+            AccountMeta::new_readonly(self.rate_model, false),
+            AccountMeta::new(self.vault, false),
+            AccountMeta::new(self.liquidity, false),
+            AccountMeta::new_readonly(self.rewards_rate_model, false),
+            AccountMeta::new_readonly(self.lending_program, false),
+            AccountMeta::new_readonly(self.liquidity_program, false),
+            AccountMeta::new_readonly(self.token_program, false),
+            AccountMeta::new_readonly(
+                Address::from_str_const("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"),
+                false,
+            ),
+            AccountMeta::new_readonly(
+                Address::from_str_const("11111111111111111111111111111111"),
+                false,
+            ),
+            AccountMeta::new_readonly(self.event_authority, false),
+            AccountMeta::new_readonly(self.program, false),
+        ]
+    }
+}
+
+/// Builder for the `escrow_yield_deposit` instruction.
+pub struct EscrowYieldDeposit;
+
+impl EscrowYieldDeposit {
+    /// Instruction discriminator.
+    pub const DISCRIMINATOR: [u8; 8] = [207, 53, 231, 252, 218, 235, 225, 15];
+
+    /// Serialize the instruction data (discriminator only).
+    pub fn data() -> Vec<u8> {
+        Self::DISCRIMINATOR.to_vec()
+    }
+
+    /// Build the instruction.
+    pub fn instruction(accounts: &EscrowYieldDepositAccounts) -> Instruction {
+        Instruction {
+            program_id: ID,
+            accounts: accounts.to_account_metas(),
+            data: Self::data(),
+        }
+    }
+}
+
+/// Accounts for the `escrow_yield_withdraw` instruction.
+#[derive(Debug, Clone)]
+pub struct EscrowYieldWithdrawAccounts {
+    pub signer: Address,
+    pub config: Address,
+    /// The user whose escrow is topped up. Marked `mut` because the JupLend
+    /// CPI signs with this PDA as a writable signer.
+    pub user: Address,
+    pub yield_market: Address,
+    pub mint: Address,
+    pub jl_mint: Address,
+    pub user_escrow_token_account: Address,
+    pub user_jl_token_account: Address,
+    /// enforced by the seeds below, created via CPI on first use
+    pub claim_account: Address,
+    pub lending_admin: Address,
+    pub lending: Address,
+    pub supply_token_reserves_liquidity: Address,
+    pub lending_supply_position_on_liquidity: Address,
+    pub rate_model: Address,
+    pub vault: Address,
+    pub liquidity: Address,
+    pub rewards_rate_model: Address,
+    pub lending_program: Address,
+    pub liquidity_program: Address,
+    pub token_program: Address,
+    pub event_authority: Address,
+    pub program: Address,
+}
+
+impl EscrowYieldWithdrawAccounts {
+    /// Build the account metas in the order expected by the program.
+    ///
+    /// Optional accounts default to the program ID when `None`, matching
+    /// the Anchor convention.
+    pub fn to_account_metas(&self) -> Vec<AccountMeta> {
+        vec![
+            AccountMeta::new(self.signer, true),
+            AccountMeta::new_readonly(self.config, false),
+            AccountMeta::new(self.user, false),
+            AccountMeta::new_readonly(self.yield_market, false),
+            AccountMeta::new_readonly(self.mint, false),
+            AccountMeta::new(self.jl_mint, false),
+            AccountMeta::new(self.user_escrow_token_account, false),
+            AccountMeta::new(self.user_jl_token_account, false),
+            AccountMeta::new(self.claim_account, false),
+            AccountMeta::new_readonly(self.lending_admin, false),
+            AccountMeta::new(self.lending, false),
+            AccountMeta::new(self.supply_token_reserves_liquidity, false),
+            AccountMeta::new(self.lending_supply_position_on_liquidity, false),
+            AccountMeta::new_readonly(self.rate_model, false),
+            AccountMeta::new(self.vault, false),
+            AccountMeta::new(self.liquidity, false),
+            AccountMeta::new_readonly(self.rewards_rate_model, false),
+            AccountMeta::new_readonly(self.lending_program, false),
+            AccountMeta::new_readonly(self.liquidity_program, false),
+            AccountMeta::new_readonly(self.token_program, false),
+            AccountMeta::new_readonly(
+                Address::from_str_const("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"),
+                false,
+            ),
+            AccountMeta::new_readonly(
+                Address::from_str_const("11111111111111111111111111111111"),
+                false,
+            ),
+            AccountMeta::new_readonly(self.event_authority, false),
+            AccountMeta::new_readonly(self.program, false),
+        ]
+    }
+}
+
+/// Arguments for the `escrow_yield_withdraw` instruction.
+#[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
+pub struct EscrowYieldWithdrawInstructionArgs {
+    pub required_amount: u64,
+}
+
+/// Builder for the `escrow_yield_withdraw` instruction.
+pub struct EscrowYieldWithdraw;
+
+impl EscrowYieldWithdraw {
+    /// Instruction discriminator.
+    pub const DISCRIMINATOR: [u8; 8] = [194, 41, 186, 176, 7, 77, 171, 138];
+
+    /// Serialize the instruction data (discriminator + borsh-layout args).
+    pub fn data(args: &EscrowYieldWithdrawInstructionArgs) -> Vec<u8> {
+        let mut data = Self::DISCRIMINATOR.to_vec();
+        data.extend_from_slice(&crate::serialize(args).expect("args serialization is infallible"));
+        data
+    }
+
+    /// Build the instruction.
+    pub fn instruction(
+        accounts: &EscrowYieldWithdrawAccounts,
+        args: &EscrowYieldWithdrawInstructionArgs,
+    ) -> Instruction {
+        Instruction {
+            program_id: ID,
+            accounts: accounts.to_account_metas(),
+            data: Self::data(args),
+        }
+    }
+}
+
+/// Accounts for the `escrow_yield_withdraw_all` instruction.
+#[derive(Debug, Clone)]
+pub struct EscrowYieldWithdrawAllAccounts {
+    pub signer: Address,
+    /// Marked `mut` because the JupLend CPI signs with this PDA as a writable
+    /// signer.
+    pub signer_user: Address,
+    pub yield_market: Address,
+    pub mint: Address,
+    pub jl_mint: Address,
+    pub user_escrow_token_account: Address,
+    pub user_jl_token_account: Address,
+    /// enforced by the seeds below, created via CPI on first use
+    pub claim_account: Address,
+    pub lending_admin: Address,
+    pub lending: Address,
+    pub supply_token_reserves_liquidity: Address,
+    pub lending_supply_position_on_liquidity: Address,
+    pub rate_model: Address,
+    pub vault: Address,
+    pub liquidity: Address,
+    pub rewards_rate_model: Address,
+    pub lending_program: Address,
+    pub liquidity_program: Address,
+    pub token_program: Address,
+    pub event_authority: Address,
+    pub program: Address,
+}
+
+impl EscrowYieldWithdrawAllAccounts {
+    /// Build the account metas in the order expected by the program.
+    ///
+    /// Optional accounts default to the program ID when `None`, matching
+    /// the Anchor convention.
+    pub fn to_account_metas(&self) -> Vec<AccountMeta> {
+        vec![
+            AccountMeta::new(self.signer, true),
+            AccountMeta::new(self.signer_user, false),
+            AccountMeta::new_readonly(self.yield_market, false),
+            AccountMeta::new_readonly(self.mint, false),
+            AccountMeta::new(self.jl_mint, false),
+            AccountMeta::new(self.user_escrow_token_account, false),
+            AccountMeta::new(self.user_jl_token_account, false),
+            AccountMeta::new(self.claim_account, false),
+            AccountMeta::new_readonly(self.lending_admin, false),
+            AccountMeta::new(self.lending, false),
+            AccountMeta::new(self.supply_token_reserves_liquidity, false),
+            AccountMeta::new(self.lending_supply_position_on_liquidity, false),
+            AccountMeta::new_readonly(self.rate_model, false),
+            AccountMeta::new(self.vault, false),
+            AccountMeta::new(self.liquidity, false),
+            AccountMeta::new_readonly(self.rewards_rate_model, false),
+            AccountMeta::new_readonly(self.lending_program, false),
+            AccountMeta::new_readonly(self.liquidity_program, false),
+            AccountMeta::new_readonly(self.token_program, false),
+            AccountMeta::new_readonly(
+                Address::from_str_const("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"),
+                false,
+            ),
+            AccountMeta::new_readonly(
+                Address::from_str_const("11111111111111111111111111111111"),
+                false,
+            ),
+            AccountMeta::new_readonly(self.event_authority, false),
+            AccountMeta::new_readonly(self.program, false),
+        ]
+    }
+}
+
+/// Arguments for the `escrow_yield_withdraw_all` instruction.
+#[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
+pub struct EscrowYieldWithdrawAllInstructionArgs {
+    pub min_amount_out: u64,
+}
+
+/// Builder for the `escrow_yield_withdraw_all` instruction.
+pub struct EscrowYieldWithdrawAll;
+
+impl EscrowYieldWithdrawAll {
+    /// Instruction discriminator.
+    pub const DISCRIMINATOR: [u8; 8] = [13, 59, 100, 64, 169, 220, 56, 145];
+
+    /// Serialize the instruction data (discriminator + borsh-layout args).
+    pub fn data(args: &EscrowYieldWithdrawAllInstructionArgs) -> Vec<u8> {
+        let mut data = Self::DISCRIMINATOR.to_vec();
+        data.extend_from_slice(&crate::serialize(args).expect("args serialization is infallible"));
+        data
+    }
+
+    /// Build the instruction.
+    pub fn instruction(
+        accounts: &EscrowYieldWithdrawAllAccounts,
+        args: &EscrowYieldWithdrawAllInstructionArgs,
     ) -> Instruction {
         Instruction {
             program_id: ID,
@@ -1655,6 +2031,8 @@ impl Init {
     }
 }
 
+/// `amount: None` settles the loan; `Some(x)` pays down `x` of the principal
+/// and leaves it running, with the collateral still locked.
 /// Accounts for the `repay_non_fungible_loan` instruction.
 #[derive(Debug, Clone)]
 pub struct RepayNonFungibleLoanAccounts {
@@ -1706,6 +2084,16 @@ impl RepayNonFungibleLoanAccounts {
     }
 }
 
+/// `amount: None` settles the loan; `Some(x)` pays down `x` of the principal
+/// and leaves it running, with the collateral still locked.
+/// Arguments for the `repay_non_fungible_loan` instruction.
+#[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
+pub struct RepayNonFungibleLoanInstructionArgs {
+    pub amount: Option<u64>,
+}
+
+/// `amount: None` settles the loan; `Some(x)` pays down `x` of the principal
+/// and leaves it running, with the collateral still locked.
 /// Builder for the `repay_non_fungible_loan` instruction.
 pub struct RepayNonFungibleLoan;
 
@@ -1713,21 +2101,28 @@ impl RepayNonFungibleLoan {
     /// Instruction discriminator.
     pub const DISCRIMINATOR: [u8; 8] = [148, 211, 15, 57, 173, 27, 26, 49];
 
-    /// Serialize the instruction data (discriminator only).
-    pub fn data() -> Vec<u8> {
-        Self::DISCRIMINATOR.to_vec()
+    /// Serialize the instruction data (discriminator + borsh-layout args).
+    pub fn data(args: &RepayNonFungibleLoanInstructionArgs) -> Vec<u8> {
+        let mut data = Self::DISCRIMINATOR.to_vec();
+        data.extend_from_slice(&crate::serialize(args).expect("args serialization is infallible"));
+        data
     }
 
     /// Build the instruction.
-    pub fn instruction(accounts: &RepayNonFungibleLoanAccounts) -> Instruction {
+    pub fn instruction(
+        accounts: &RepayNonFungibleLoanAccounts,
+        args: &RepayNonFungibleLoanInstructionArgs,
+    ) -> Instruction {
         Instruction {
             program_id: ID,
             accounts: accounts.to_account_metas(),
-            data: Self::data(),
+            data: Self::data(args),
         }
     }
 }
 
+/// `amount: None` settles the loan; `Some(x)` pays down `x` of the principal
+/// and leaves it running.
 /// Accounts for the `repay_token_loan` instruction.
 #[derive(Debug, Clone)]
 pub struct RepayTokenLoanAccounts {
@@ -1778,6 +2173,16 @@ impl RepayTokenLoanAccounts {
     }
 }
 
+/// `amount: None` settles the loan; `Some(x)` pays down `x` of the principal
+/// and leaves it running.
+/// Arguments for the `repay_token_loan` instruction.
+#[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
+pub struct RepayTokenLoanInstructionArgs {
+    pub amount: Option<u64>,
+}
+
+/// `amount: None` settles the loan; `Some(x)` pays down `x` of the principal
+/// and leaves it running.
 /// Builder for the `repay_token_loan` instruction.
 pub struct RepayTokenLoan;
 
@@ -1785,17 +2190,22 @@ impl RepayTokenLoan {
     /// Instruction discriminator.
     pub const DISCRIMINATOR: [u8; 8] = [208, 50, 208, 39, 189, 153, 25, 251];
 
-    /// Serialize the instruction data (discriminator only).
-    pub fn data() -> Vec<u8> {
-        Self::DISCRIMINATOR.to_vec()
+    /// Serialize the instruction data (discriminator + borsh-layout args).
+    pub fn data(args: &RepayTokenLoanInstructionArgs) -> Vec<u8> {
+        let mut data = Self::DISCRIMINATOR.to_vec();
+        data.extend_from_slice(&crate::serialize(args).expect("args serialization is infallible"));
+        data
     }
 
     /// Build the instruction.
-    pub fn instruction(accounts: &RepayTokenLoanAccounts) -> Instruction {
+    pub fn instruction(
+        accounts: &RepayTokenLoanAccounts,
+        args: &RepayTokenLoanInstructionArgs,
+    ) -> Instruction {
         Instruction {
             program_id: ID,
             accounts: accounts.to_account_metas(),
-            data: Self::data(),
+            data: Self::data(args),
         }
     }
 }
@@ -1857,6 +2267,63 @@ impl SetLoanExtendable {
     }
 }
 
+/// Accounts for the `set_yield_enabled` instruction.
+#[derive(Debug, Clone)]
+pub struct SetYieldEnabledAccounts {
+    pub signer: Address,
+    pub signer_user: Address,
+    pub event_authority: Address,
+    pub program: Address,
+}
+
+impl SetYieldEnabledAccounts {
+    /// Build the account metas in the order expected by the program.
+    ///
+    /// Optional accounts default to the program ID when `None`, matching
+    /// the Anchor convention.
+    pub fn to_account_metas(&self) -> Vec<AccountMeta> {
+        vec![
+            AccountMeta::new_readonly(self.signer, true),
+            AccountMeta::new(self.signer_user, false),
+            AccountMeta::new_readonly(self.event_authority, false),
+            AccountMeta::new_readonly(self.program, false),
+        ]
+    }
+}
+
+/// Arguments for the `set_yield_enabled` instruction.
+#[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
+pub struct SetYieldEnabledInstructionArgs {
+    pub enabled: bool,
+}
+
+/// Builder for the `set_yield_enabled` instruction.
+pub struct SetYieldEnabled;
+
+impl SetYieldEnabled {
+    /// Instruction discriminator.
+    pub const DISCRIMINATOR: [u8; 8] = [110, 239, 153, 83, 80, 53, 223, 16];
+
+    /// Serialize the instruction data (discriminator + borsh-layout args).
+    pub fn data(args: &SetYieldEnabledInstructionArgs) -> Vec<u8> {
+        let mut data = Self::DISCRIMINATOR.to_vec();
+        data.extend_from_slice(&crate::serialize(args).expect("args serialization is infallible"));
+        data
+    }
+
+    /// Build the instruction.
+    pub fn instruction(
+        accounts: &SetYieldEnabledAccounts,
+        args: &SetYieldEnabledInstructionArgs,
+    ) -> Instruction {
+        Instruction {
+            program_id: ID,
+            accounts: accounts.to_account_metas(),
+            data: Self::data(args),
+        }
+    }
+}
+
 /// Accounts for the `update_config` instruction.
 #[derive(Debug, Clone)]
 pub struct UpdateConfigAccounts {
@@ -1901,6 +2368,61 @@ impl UpdateConfig {
     pub fn instruction(
         accounts: &UpdateConfigAccounts,
         args: &UpdateConfigInstructionArgs,
+    ) -> Instruction {
+        Instruction {
+            program_id: ID,
+            accounts: accounts.to_account_metas(),
+            data: Self::data(args),
+        }
+    }
+}
+
+/// Accounts for the `update_yield_market` instruction.
+#[derive(Debug, Clone)]
+pub struct UpdateYieldMarketAccounts {
+    pub admin: Address,
+    pub config: Address,
+    pub yield_market: Address,
+}
+
+impl UpdateYieldMarketAccounts {
+    /// Build the account metas in the order expected by the program.
+    ///
+    /// Optional accounts default to the program ID when `None`, matching
+    /// the Anchor convention.
+    pub fn to_account_metas(&self) -> Vec<AccountMeta> {
+        vec![
+            AccountMeta::new_readonly(self.admin, true),
+            AccountMeta::new_readonly(self.config, false),
+            AccountMeta::new(self.yield_market, false),
+        ]
+    }
+}
+
+/// Arguments for the `update_yield_market` instruction.
+#[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
+pub struct UpdateYieldMarketInstructionArgs {
+    pub action: crate::state::UpdateYieldMarketAction,
+}
+
+/// Builder for the `update_yield_market` instruction.
+pub struct UpdateYieldMarket;
+
+impl UpdateYieldMarket {
+    /// Instruction discriminator.
+    pub const DISCRIMINATOR: [u8; 8] = [104, 236, 82, 238, 56, 49, 132, 152];
+
+    /// Serialize the instruction data (discriminator + borsh-layout args).
+    pub fn data(args: &UpdateYieldMarketInstructionArgs) -> Vec<u8> {
+        let mut data = Self::DISCRIMINATOR.to_vec();
+        data.extend_from_slice(&crate::serialize(args).expect("args serialization is infallible"));
+        data
+    }
+
+    /// Build the instruction.
+    pub fn instruction(
+        accounts: &UpdateYieldMarketAccounts,
+        args: &UpdateYieldMarketInstructionArgs,
     ) -> Instruction {
         Instruction {
             program_id: ID,
