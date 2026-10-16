@@ -221,7 +221,7 @@ unsafe impl<'de, C: wincode::config::Config> SchemaRead<'de, C> for Asset {
 
             _ => unreachable!(),
         };
-        let mut padding = [std::mem::MaybeUninit::<u8>::uninit(); Self::PAYLOAD_SIZE];
+        let mut padding = [0u8; Self::PAYLOAD_SIZE];
         reader.copy_into_slice(&mut padding[..Self::PAYLOAD_SIZE - payload_len])?;
         dst.write(value);
         Ok(())
@@ -421,7 +421,7 @@ unsafe impl<'de, C: wincode::config::Config> SchemaRead<'de, C> for AssetFilter 
 
             _ => unreachable!(),
         };
-        let mut padding = [std::mem::MaybeUninit::<u8>::uninit(); Self::PAYLOAD_SIZE];
+        let mut padding = [0u8; Self::PAYLOAD_SIZE];
         reader.copy_into_slice(&mut padding[..Self::PAYLOAD_SIZE - payload_len])?;
         dst.write(value);
         Ok(())

@@ -2,7 +2,7 @@ use {
     codama_macros::CodamaType,
     solana_address::{Address, address_eq},
     wincode::{SchemaRead, SchemaWrite},
-    zeropod::pod::{PodI64, PodU64},
+    zeropod::{I64, U64},
 };
 
 /// Maximum distinct seized-collateral mints held by one vault.
@@ -20,10 +20,10 @@ pub struct SinkSlot {
     pub mint: Address,
     /// Numéraire mark for the full custody balance of [`Self::mint`].
     #[codama(type = number(u64))]
-    pub value: PodU64,
+    pub value: U64,
     /// Last attestation time for [`Self::value`].
     #[codama(type = number(i64))]
-    pub last_priced_at: PodI64,
+    pub last_priced_at: I64,
     /// [`SINK_FLAG_PRICED`].
     pub flags: u8,
 }
@@ -33,8 +33,8 @@ impl SinkSlot {
     pub const fn zero() -> Self {
         Self {
             mint: Address::new_from_array([0; 32]),
-            value: PodU64::ZERO,
-            last_priced_at: PodI64::ZERO,
+            value: U64::ZERO,
+            last_priced_at: I64::ZERO,
             flags: 0,
         }
     }
@@ -89,8 +89,8 @@ impl SinkSlot {
     /// takes `new_value` to 0 and frees the slot through [`Self::release`].
     #[inline]
     pub fn write_off(&mut self, now: i64) {
-        self.value = PodU64::ZERO;
-        self.last_priced_at = PodI64::from(now);
+        self.value = U64::ZERO;
+        self.last_priced_at = I64::from(now);
         self.set_priced();
     }
 }

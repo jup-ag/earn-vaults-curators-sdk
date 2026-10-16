@@ -28,12 +28,14 @@ mod update_vault;
 mod validate_aum;
 
 use {
-    earn_vaults_interface::{VaultInstruction, zeropod::pod::PodOption},
+    earn_vaults_interface::{VaultInstruction, encoding::PodOption},
     solana_address::Address,
 };
 
 /// Wrap an `Option<T>` in its zero-copy wire representation.
-pub(crate) fn pod_opt<T, P: Copy + From<T>>(value: Option<T>) -> PodOption<P> {
+pub(crate) fn pod_opt<T, P: earn_vaults_interface::encoding::ZcElem + From<T>>(
+    value: Option<T>,
+) -> PodOption<P> {
     value.map_or_else(PodOption::none, |value| PodOption::some(P::from(value)))
 }
 

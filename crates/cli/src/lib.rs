@@ -49,7 +49,8 @@ pub fn load_kp(path: &Path) -> Result<Keypair> {
 pub fn rpc(url: &str, method: &str, params: Value) -> Result<Value> {
     let resp: Value = ureq::post(url)
         .send_json(json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}))?
-        .into_json()?;
+        .body_mut()
+        .read_json()?;
     if let Some(e) = resp.get("error") {
         bail!("rpc {method} error: {e}");
     }
@@ -503,6 +504,80 @@ pub fn fetch_snapshot(url: &str, vault: Address, user: Option<Address>) -> Resul
 mod tests {
     use super::*;
 
+    #[test]
+    fn rpc_preserves_json_request_and_errors() {
+        use std::{
+            io::{BufRead, BufReader, Read, Write},
+            net::TcpListener,
+        };
+
+        for (status, body, succeeds) in [
+            (
+                "200 OK",
+                r#"{"jsonrpc":"2.0","id":1,"result":{"value":42}}"#,
+                true,
+            ),
+            (
+                "200 OK",
+                r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"bad params"}}"#,
+                false,
+            ),
+            (
+                "500 Internal Server Error",
+                r#"{"result":{"value":42}}"#,
+                false,
+            ),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let server = thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut reader = BufReader::new(&mut stream);
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                assert_eq!(line, "POST / HTTP/1.1\r\n");
+                let mut length = None;
+                loop {
+                    line.clear();
+                    assert!(reader.read_line(&mut line).unwrap() > 0);
+                    if line == "\r\n" {
+                        break;
+                    }
+                    if let Some((name, value)) = line.split_once(':')
+                        && name.eq_ignore_ascii_case("content-length")
+                    {
+                        length = Some(value.trim().parse::<usize>().unwrap());
+                    }
+                }
+                let mut request = vec![0; length.unwrap()];
+                reader.read_exact(&mut request).unwrap();
+                assert_eq!(
+                    serde_json::from_slice::<Value>(&request).unwrap(),
+                    json!({"jsonrpc":"2.0","id":1,"method":"getBalance","params":["vault"]})
+                );
+                write!(stream, "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            });
+            let response = rpc(&url, "getBalance", json!(["vault"]));
+            server.join().unwrap();
+            if succeeds {
+                assert_eq!(response.unwrap(), json!({"value":42}));
+            } else {
+                let error = response.unwrap_err().to_string();
+                assert!(
+                    error.contains(if status == "200 OK" {
+                        "bad params"
+                    } else {
+                        "500"
+                    }),
+                    "{error}"
+                );
+            }
+        }
+    }
+
     /// Compute-budget encoding: tags and little-endian widths are what the
     /// runtime parses, and a 0 means "omit", not "bid nothing".
     #[test]
@@ -599,10 +674,17 @@ mod tests {
             key: Address::new_from_array([3u8; 32]),
             addresses: keys,
         };
-        let hash = Hash::new_from_array([4u8; 32]);
+        let hash = [4u8; 32];
 
-        let bare = v0::Message::try_compile(&payer, std::slice::from_ref(&ix), &[], hash).unwrap();
-        let with_lut = v0::Message::try_compile(&payer, &[ix], &[lut], hash).unwrap();
+        let bare = v0::Message::try_compile(
+            &payer,
+            std::slice::from_ref(&ix),
+            &[],
+            Hash::new_from_array(hash),
+        )
+        .unwrap();
+        let with_lut =
+            v0::Message::try_compile(&payer, &[ix], &[lut], Hash::new_from_array(hash)).unwrap();
 
         assert!(
             with_lut.serialize().len() < bare.serialize().len(),

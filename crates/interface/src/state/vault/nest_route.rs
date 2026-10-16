@@ -6,12 +6,13 @@
 //! bytes bind redeem to one OFTStore + share mint. All-zero disables Nest.
 
 use {
+    crate::encoding,
     codama_macros::CodamaType,
+    encoding::{ZcElem, ZcValidate, ZeroPodError},
     solana_address::Address,
     solana_program_error::ProgramError,
     solana_sha256_hasher::hashv,
     wincode::{SchemaRead, SchemaWrite},
-    zeropod::{ZcElem, ZcValidate, error::ZeroPodError},
 };
 
 #[derive(SchemaRead, SchemaWrite, Clone, Copy, CodamaType)]

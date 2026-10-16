@@ -3,7 +3,7 @@ use {
         instructions::SYSTEM_PROGRAM_ID,
         pda::{derive_escrow, derive_escrow_token_account},
     },
-    earn_vaults_interface::{VaultInstruction, constants::EVENT_PDA, zeropod::pod::PodU64},
+    earn_vaults_interface::{VaultInstruction, constants::EVENT_PDA, zeropod::U64},
     solana_address::Address,
     solana_instruction::{AccountMeta, Instruction},
 };
@@ -28,9 +28,9 @@ impl Subscribe {
         let escrow = derive_escrow(&self.vault, &self.user, self.nonce);
         let escrow_token_account = derive_escrow_token_account(&self.vault, &self.user, self.nonce);
 
-        let amount = PodU64::from(self.amount);
-        let nonce = PodU64::from(self.nonce);
-        let min_shares_out = PodU64::from(self.min_shares_out);
+        let amount = U64::from(self.amount);
+        let nonce = U64::from(self.nonce);
+        let min_shares_out = U64::from(self.min_shares_out);
         let data = super::encode(&VaultInstruction::Subscribe {
             amount: &amount,
             nonce: &nonce,

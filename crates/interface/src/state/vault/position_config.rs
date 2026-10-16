@@ -3,7 +3,7 @@ use {
     codama_macros::CodamaType,
     solana_program_error::ProgramError,
     wincode::{SchemaRead, SchemaWrite},
-    zeropod::pod::{PodI64, PodU16, PodU64},
+    zeropod::{I64, U16, U64},
 };
 
 pub const POSITION_FLAG_REQUIRED_IN_AUM: u8 = 1 << 0;
@@ -46,14 +46,14 @@ pub struct PositionConfig {
     pub flags: u8,
     /// Optional per-position staleness override. `0` means global default.
     #[codama(type = number(u64))]
-    pub max_staleness_seconds: PodU64,
+    pub max_staleness_seconds: U64,
     /// Optional per-position drift override. `0` means global default.
     #[codama(type = number(u16))]
-    pub max_drift_bps: PodU16,
+    pub max_drift_bps: U16,
     #[codama(type = number(u64))]
-    pub last_value: PodU64,
+    pub last_value: U64,
     #[codama(type = number(i64))]
-    pub last_priced_at: PodI64,
+    pub last_priced_at: I64,
 }
 
 impl PositionConfig {
@@ -62,10 +62,10 @@ impl PositionConfig {
         Self {
             protocol: 0,
             flags: 0,
-            max_staleness_seconds: PodU64::ZERO,
-            max_drift_bps: PodU16::ZERO,
-            last_value: PodU64::ZERO,
-            last_priced_at: PodI64::ZERO,
+            max_staleness_seconds: U64::ZERO,
+            max_drift_bps: U16::ZERO,
+            last_value: U64::ZERO,
+            last_priced_at: I64::ZERO,
         }
     }
 

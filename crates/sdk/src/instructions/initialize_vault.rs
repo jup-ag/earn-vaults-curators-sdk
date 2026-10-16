@@ -8,8 +8,9 @@ use {
         VaultInstruction,
         arguments::{AssetInit, InitializeVaultArgs, PositionInit},
         constants::EVENT_PDA,
+        encoding::PodOption,
         state::{ASSET_FLAG_CHAINLINK, MAX_ALLOWED_ASSETS, MAX_POSITIONS},
-        zeropod::pod::{PodOption, PodU64},
+        zeropod::U64,
     },
     solana_address::Address,
     solana_instruction::{AccountMeta, Instruction},
@@ -113,8 +114,8 @@ impl InitializeVault<'_> {
             oracle: Address::new_from_array([0; 32]),
             flags: 0,
             report_decimals: 0,
-            max_deployed: PodU64::ZERO,
-            max_deposit: PodU64::ZERO,
+            max_deployed: U64::ZERO,
+            max_deposit: U64::ZERO,
         }; MAX_ALLOWED_ASSETS];
         let mut mints: Vec<Address> = Vec::with_capacity(asset_count);
         for (i, (asset_mint, oracle)) in self.base_assets.iter().zip(&self.base_oracles).enumerate()
@@ -133,10 +134,10 @@ impl InitializeVault<'_> {
             mints.push(*asset_mint);
         }
         for (i, v) in self.max_deployed.iter().enumerate() {
-            assets[i].max_deployed = PodU64::from(*v);
+            assets[i].max_deployed = U64::from(*v);
         }
         for (i, v) in self.max_deposit.iter().enumerate() {
-            assets[i].max_deposit = PodU64::from(*v);
+            assets[i].max_deposit = U64::from(*v);
         }
         for i in &self.chainlink_assets {
             if *i >= asset_count {

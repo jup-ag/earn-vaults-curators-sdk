@@ -2,7 +2,7 @@ use {
     codama_macros::CodamaEvent,
     solana_address::Address,
     wincode::{SchemaRead, SchemaWrite},
-    zeropod::pod::PodU64,
+    zeropod::U64,
 };
 
 // VaultEvent tags: Deposited = 1.
@@ -13,9 +13,9 @@ use {
 pub struct Deposited {
     pub owner: Address,
     #[codama(type = number(u64))]
-    pub amount: PodU64,
+    pub amount: U64,
     #[codama(type = number(u64))]
-    pub shares_minted: PodU64,
+    pub shares_minted: U64,
 }
 
 // VaultEvent::SubscribeRequested = 2.
@@ -26,7 +26,7 @@ pub struct Deposited {
 pub struct SubscribeRequested {
     pub owner: Address,
     #[codama(type = number(u64))]
-    pub amount: PodU64,
+    pub amount: U64,
 }
 
 // VaultEvent::SubscribeFulfilled = 3.
@@ -37,9 +37,9 @@ pub struct SubscribeRequested {
 pub struct SubscribeFulfilled {
     pub owner: Address,
     #[codama(type = number(u64))]
-    pub amount: PodU64,
+    pub amount: U64,
     #[codama(type = number(u64))]
-    pub shares_minted: PodU64,
+    pub shares_minted: U64,
 }
 
 // VaultEvent::SubscribeCancelled = 4.
@@ -50,5 +50,5 @@ pub struct SubscribeFulfilled {
 pub struct SubscribeCancelled {
     pub owner: Address,
     #[codama(type = number(u64))]
-    pub refund_amount: PodU64,
+    pub refund_amount: U64,
 }

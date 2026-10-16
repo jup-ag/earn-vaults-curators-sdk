@@ -5,7 +5,7 @@ use {
     solana_address::{Address, address_eq},
     solana_program_error::ProgramError,
     wincode::{SchemaRead, SchemaWrite},
-    zeropod::pod::PodU64,
+    zeropod::U64,
 };
 
 #[derive(SchemaRead, SchemaWrite, CodamaAccount)]
@@ -17,7 +17,7 @@ pub struct Delegate {
     pub delegate: Address,
     pub protocol_id: Address,
     #[codama(type = number(u64))]
-    pub permissions: PodU64,
+    pub permissions: U64,
     pub bump: u8,
 }
 

@@ -3,8 +3,8 @@ use {
     earn_vaults_interface::{
         VaultInstruction,
         arguments::SetProtocolPolicyArgs,
+        encoding::ZcElem,
         state::{CollateralTerms, Protocol},
-        zeropod::ZcElem,
     },
     solana_address::Address,
     solana_instruction::{AccountMeta, Instruction},

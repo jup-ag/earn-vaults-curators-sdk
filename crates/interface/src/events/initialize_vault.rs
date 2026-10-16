@@ -3,7 +3,7 @@ use {
     codama_macros::CodamaEvent,
     solana_address::Address,
     wincode::{SchemaRead, SchemaWrite},
-    zeropod::pod::{PodI64, PodU16, PodU64},
+    zeropod::{I64, U16, U64},
 };
 
 // Discriminator = the `VaultEvent` tag byte (InitializeVault = 0), matching the
@@ -20,11 +20,11 @@ pub struct InitializeVaultEvent {
     pub assets: [AssetConfig; 8],
     /// Annual curator management fee; the global protocol rate is additive.
     #[codama(type = number(u16))]
-    pub management_fee_bps: PodU16,
+    pub management_fee_bps: U16,
     #[codama(type = number(u16))]
-    pub instant_redeem_fee_bps: PodU16,
+    pub instant_redeem_fee_bps: U16,
     #[codama(type = number(u64))]
-    pub timelock_delay: PodU64,
+    pub timelock_delay: U64,
     #[codama(type = number(i64))]
-    pub created_at: PodI64,
+    pub created_at: I64,
 }

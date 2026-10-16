@@ -2,9 +2,10 @@ use {
     crate::{
         check_account_layout,
         constants::{
-            BOOTSTRAP_HWM_NAV, MAX_LIQ_SLIPPAGE_PER_WINDOW_BPS, MAX_STALENESS_SECONDS,
-            MAX_SWAP_SLIPPAGE_PER_WINDOW_BPS, NAV_SCALE, PROTOCOL_MANAGEMENT_FEE_BPS,
-            PROTOCOL_PERFORMANCE_FEE_BPS, SECONDS_PER_YEAR, SWAP_SLIPPAGE_WINDOW_SECONDS,
+            BOOTSTRAP_HWM_NAV, MAX_DRIFT_BPS, MAX_LIQ_SLIPPAGE_PER_WINDOW_BPS,
+            MAX_STALENESS_SECONDS, MAX_SWAP_SLIPPAGE_PER_WINDOW_BPS, NAV_SCALE,
+            PROTOCOL_MANAGEMENT_FEE_BPS, PROTOCOL_PERFORMANCE_FEE_BPS, SECONDS_PER_YEAR,
+            SWAP_SLIPPAGE_WINDOW_SECONDS, drift_budget,
         },
         errors::VaultError,
         state::{
@@ -16,7 +17,7 @@ use {
     solana_address::{Address, address_eq},
     solana_program_error::ProgramError,
     wincode::{SchemaRead, SchemaWrite},
-    zeropod::pod::{PodI64, PodU16, PodU32, PodU64, PodU128},
+    zeropod::{I64, U16, U32, U64, U128},
 };
 
 #[derive(SchemaRead, SchemaWrite, CodamaAccount)]
@@ -29,64 +30,64 @@ pub struct Vault {
     pub share_mint: Address,
     pub pending_curator: Address,
     #[codama(type = number(i64))]
-    pub created_at: PodI64,
+    pub created_at: I64,
     pub authority_bump: u8,
 
     // Configuration
     pub paused: u8,
     #[codama(type = number(u16))]
-    pub management_fee_bps: PodU16,
+    pub management_fee_bps: U16,
     #[codama(type = number(u16))]
-    pub instant_redeem_fee_bps: PodU16,
+    pub instant_redeem_fee_bps: U16,
     /// Haircut applied to occupied sink marks by `validate_aum`.
     #[codama(type = number(u16))]
-    pub sink_haircut_bps: PodU16,
+    pub sink_haircut_bps: U16,
     /// Sink-mark freshness window; `0` uses `MAX_STALENESS_SECONDS`.
     #[codama(type = number(u64))]
-    pub sink_max_staleness_seconds: PodU64,
+    pub sink_max_staleness_seconds: U64,
     /// Minimum seconds between `Redeem` and `ClaimRedeem`, giving the manager
     /// time to recall capital. `0` disables; capped at `MAX_TIMELOCK_DELAY`.
     #[codama(type = number(u64))]
-    pub timelock_delay: PodU64,
+    pub timelock_delay: U64,
     /// Transient liability cap in numéraire micro-units; `0` disables it.
     #[codama(type = number(u64))]
-    pub max_flash_liability: PodU64,
+    pub max_flash_liability: U64,
 
     // Live state
     #[codama(type = number(u64))]
-    pub aum: PodU64,
+    pub aum: U64,
     #[codama(type = number(i64))]
-    pub last_priced_at: PodI64,
+    pub last_priced_at: I64,
     #[codama(type = number(u64))]
-    pub last_priced_slot: PodU64,
+    pub last_priced_slot: U64,
     #[codama(type = number(u64))]
-    pub pending_redeem_shares: PodU64,
+    pub pending_redeem_shares: U64,
     /// Raw principal temporarily lent to custody by a `FLASH` delegate.
     #[codama(type = number(u64))]
-    pub flash_liability: PodU64,
+    pub flash_liability: U64,
     /// Performance-fee high-water mark: highest `nav_for_watermark` ever
     /// folded, ratcheted on every supply-changing flow. Never lowered.
     #[codama(type = number(u128))]
-    pub hwm_nav: PodU128,
+    pub hwm_nav: U128,
     #[codama(type = number(u128))]
-    pub fee_capital_time: PodU128,
+    pub fee_capital_time: U128,
     #[codama(type = number(i64))]
-    pub last_fee_accrual_at: PodI64,
+    pub last_fee_accrual_at: I64,
     #[codama(type = number(u64))]
-    pub perf_fee_accrued: PodU64,
+    pub perf_fee_accrued: U64,
     /// Currently consumed swap-slippage bucket capacity, in numeraire.
     #[codama(type = number(u64))]
-    pub swap_slippage_spent: PodU64,
+    pub swap_slippage_spent: U64,
     /// Timestamp of the last successful swap-slippage bucket refill.
     #[codama(type = number(i64))]
-    pub swap_slippage_last_refill_at: PodI64,
+    pub swap_slippage_last_refill_at: I64,
     /// Currently consumed liquidation-slippage bucket capacity, in numeraire.
     /// Shared liquidation shortfall across all sinks in the current window.
     #[codama(type = number(u64))]
-    pub liq_slippage_spent: PodU64,
+    pub liq_slippage_spent: U64,
     /// Timestamp of the last successful liquidation-slippage bucket refill.
     #[codama(type = number(i64))]
-    pub liq_slippage_last_refill_at: PodI64,
+    pub liq_slippage_last_refill_at: I64,
 
     // Rows
     pub assets: [AssetConfig; 8],
@@ -95,12 +96,12 @@ pub struct Vault {
     /// Seized collateral awaiting sale, keyed by mint. See [`SinkSlot`].
     pub sinks: [SinkSlot; 4],
     #[codama(type = number(u16))]
-    pub sink_bootstrap_cap_bps: PodU16,
+    pub sink_bootstrap_cap_bps: U16,
     pub sink_capacity: u8,
     /// HWM performance fee on NAV gains, in bps, minted to the curator by
     /// `crystallize_fees`.
     #[codama(type = number(u16))]
-    pub performance_fee_bps: PodU16,
+    pub performance_fee_bps: U16,
     pub curator_fee_account_bump: u8,
     pub protocol_fee_account_bump: u8,
     /// Confidence discount `validate_aum` left in `aum`: `Σ(mid − floor)` over
@@ -109,18 +110,18 @@ pub struct Vault {
     /// carried it, not the new shares (L-04). `u16::MAX` = not representable;
     /// mints fail closed.
     #[codama(type = number(u16))]
-    pub aum_conf_bps: PodU16,
+    pub aum_conf_bps: U16,
     /// Live `Delegate` and `ProtocolPolicy` accounts. `grant_revoke_delegate`
     /// and `set_protocol_policy` count creates and closes; `close_vault`
     /// refuses while any remain, so no child can outlive the vault and rebind
     /// to a same-address recreation (I-01).
     #[codama(type = number(u16))]
-    pub child_count: PodU16,
+    pub child_count: U16,
     /// Maximum age of validated AUM for settlement and first-mark bounds.
     /// Zero selects 60 seconds; positive values apply exactly. Oracle,
     /// position and sink freshness limits remain independent.
     #[codama(type = number(u32))]
-    pub max_aum_staleness_seconds: PodU32,
+    pub max_aum_staleness_seconds: U32,
     /// Zero-initialised room for future fields.
     _reserved: [u8; 60],
 }
@@ -212,6 +213,16 @@ impl Vault {
     /// counter existed (I-01) were never counted.
     pub fn remove_child(&mut self) {
         self.child_count = self.child_count.get().saturating_sub(1).into();
+    }
+
+    /// The first configured, deposit-enabled asset priced into AUM is the
+    /// canonical asset for instant deposits and withdrawals. Return its row so
+    /// callers can use the matching token program and asset metadata.
+    #[inline]
+    pub fn canonical_base_asset(&self) -> Option<(usize, &AssetConfig)> {
+        self.assets.iter().enumerate().find(|(_, asset)| {
+            asset.configured() && asset.deposit_enabled() && asset.price_in_aum()
+        })
     }
 
     /// The enabled, AUM-counted position tracking `protocol`. A scan, because
@@ -323,8 +334,8 @@ impl Vault {
 
     #[inline]
     fn fold_capital_time(&mut self, now: i64) {
-        self.fee_capital_time = PodU128::from(self.fee_capital_time_at(now));
-        self.last_fee_accrual_at = PodI64::from(now);
+        self.fee_capital_time = U128::from(self.fee_capital_time_at(now));
+        self.last_fee_accrual_at = I64::from(now);
     }
 
     /// Fold the elapsed AUM·time segment and stamp the clock. MUST run before
@@ -377,10 +388,10 @@ impl Vault {
         // that cleared basis. Re-arming before the clear would make the next
         // cohort's principal look like a performance gain.
         if eff_supply == 0 {
-            self.fee_capital_time = PodU128::ZERO;
-            self.perf_fee_accrued = PodU64::ZERO;
-            self.last_fee_accrual_at = PodI64::from(now);
-            self.hwm_nav = PodU128::from(
+            self.fee_capital_time = U128::ZERO;
+            self.perf_fee_accrued = U64::ZERO;
+            self.last_fee_accrual_at = I64::from(now);
+            self.hwm_nav = U128::from(
                 crate::nav::nav_per_share(0, self.eff_aum(0, now)).unwrap_or(BOOTSTRAP_HWM_NAV),
             );
             return;
@@ -395,13 +406,13 @@ impl Vault {
             let pending = self.perf_pending(eff_supply, now);
             if pending > 0 {
                 self.perf_fee_accrued =
-                    PodU64::from(u64::from(self.perf_fee_accrued).saturating_add(pending));
+                    U64::from(u64::from(self.perf_fee_accrued).saturating_add(pending));
             }
         }
         self.write_down_unpayable_fees(eff_supply, now);
         // Ratchet from the post-write-down basis even when no fee was booked:
         // forgiven debt is not a gain that a later fold may charge again.
-        self.hwm_nav = PodU128::from(prior_hwm.max(self.nav_for_watermark(eff_supply, now)));
+        self.hwm_nav = U128::from(prior_hwm.max(self.nav_for_watermark(eff_supply, now)));
     }
 
     /// Ratchet the HWM over a non-economic NAV increase after fee shares are
@@ -414,9 +425,8 @@ impl Vault {
     pub fn ratchet_hwm_after_fee_mint(&mut self, share_supply: u64, now: i64) {
         let eff_supply = self.eff_supply(share_supply);
         if eff_supply > 0 {
-            self.hwm_nav = PodU128::from(
-                u128::from(self.hwm_nav).max(self.nav_for_watermark(eff_supply, now)),
-            );
+            self.hwm_nav =
+                U128::from(u128::from(self.hwm_nav).max(self.nav_for_watermark(eff_supply, now)));
         }
     }
 
@@ -446,20 +456,19 @@ impl Vault {
         // zero-cap book must forgive sub-unit capital-time instead of letting
         // it resurrect after a later AUM recovery.
         if prior_capital_time.saturating_mul(bps) > u128::from(cap).saturating_mul(DENOM) {
-            self.fee_capital_time = PodU128::from(u128::from(cap).saturating_mul(DENOM) / bps);
+            self.fee_capital_time = U128::from(u128::from(cap).saturating_mul(DENOM) / bps);
         }
 
         let room = cap.saturating_sub(self.accrued_fee_assets(now));
-        self.perf_fee_accrued = PodU64::from(u64::from(self.perf_fee_accrued).min(room));
+        self.perf_fee_accrued = U64::from(u64::from(self.perf_fee_accrued).min(room));
 
         if u128::from(self.fee_capital_time) != prior_capital_time
             || u64::from(self.perf_fee_accrued) != prior_perf
         {
             // Forgiveness raises fee-net NAV; ratchet to that post-write-down
             // basis so the waived claim cannot be booked again as performance.
-            self.hwm_nav = PodU128::from(
-                u128::from(self.hwm_nav).max(self.nav_for_watermark(eff_supply, now)),
-            );
+            self.hwm_nav =
+                U128::from(u128::from(self.hwm_nav).max(self.nav_for_watermark(eff_supply, now)));
         }
     }
 
@@ -532,8 +541,8 @@ impl Vault {
         } else {
             streaming.saturating_mul(DENOM).div_ceil(bps)
         };
-        self.fee_capital_time = PodU128::from(capital_time.saturating_sub(consumed));
-        self.perf_fee_accrued = PodU64::from(
+        self.fee_capital_time = U128::from(capital_time.saturating_sub(consumed));
+        self.perf_fee_accrued = U64::from(
             u64::from(self.perf_fee_accrued)
                 .saturating_sub(paid.curator_performance)
                 .saturating_sub(paid.protocol_performance),
@@ -596,8 +605,8 @@ impl Vault {
             now,
             MAX_SWAP_SLIPPAGE_PER_WINDOW_BPS,
         )?;
-        self.swap_slippage_spent = PodU64::from(spent);
-        self.swap_slippage_last_refill_at = PodI64::from(at);
+        self.swap_slippage_spent = U64::from(spent);
+        self.swap_slippage_last_refill_at = I64::from(at);
         Ok(())
     }
 
@@ -617,8 +626,8 @@ impl Vault {
             now,
             MAX_LIQ_SLIPPAGE_PER_WINDOW_BPS,
         )?;
-        self.liq_slippage_spent = PodU64::from(spent);
-        self.liq_slippage_last_refill_at = PodI64::from(at);
+        self.liq_slippage_spent = U64::from(spent);
+        self.liq_slippage_last_refill_at = I64::from(at);
         Ok(())
     }
 
@@ -653,6 +662,109 @@ impl Vault {
                 .min(self.fee_payable_cap()),
         )
     }
+
+    /// Refuse instant redemption when permissioned opaque marks can move NAV by
+    /// more than its exit fee can absorb. This is a runtime gate, not only a
+    /// configuration check: old vaults and newly occupied sink slots must fail
+    /// closed too. Issuance separately prices in mark headroom because an exit
+    /// fee cannot protect the fee-free queued redeem path.
+    ///
+    /// Bounds the total mark-up that distinct opaque NAV inputs can compose
+    /// around `validate_aum` in one transaction. Each mark's cap is based on the
+    /// then-current AUM, so capacities compound rather than merely add. This is
+    /// deliberately not described as protection for fee-free queued exits.
+    #[inline]
+    pub fn require_instant_mark_fee_safe(&self) -> Result<(), ProgramError> {
+        let unsafe_direct = || ProgramError::from(VaultError::InstantRedeemDisabled);
+
+        let fee_bps = self.instant_redeem_fee_bps.get();
+        // A disabled instant exit is safe regardless of the strategy's mark
+        // shape; queued issuance is protected separately by entry headroom.
+        if fee_bps == u16::MAX {
+            return Ok(());
+        }
+
+        // A manual price drifts in bps of the token *price*, but Vault stores no
+        // per-row custody balance. With a leveraged/offset book there is no
+        // sound conversion from that price move to bps of net AUM, so instant
+        // redemption is disabled whenever such a row affects NAV.
+        if self
+            .assets
+            .iter()
+            .any(|a| a.configured() && a.price_in_aum() && a.manual_price())
+        {
+            return Err(unsafe_direct());
+        }
+
+        // Fluid's position mark nets collateral and debt. A third-party
+        // liquidation can lower that net value without invalidating our mark,
+        // so its drift cap cannot protect an instant exit. A lender-only slot
+        // is Earn-only: Fluid Vaults is refused at grant and at routing, so its
+        // mark holds unliquidatable Earn receipts and the drift cap below holds.
+        if self.positions.iter().any(|p| {
+            p.enabled()
+                && p.required_in_aum()
+                && p.protocol == Protocol::JupiterLend as u8
+                && !p.lender_only()
+        }) {
+            return Err(unsafe_direct());
+        }
+
+        // Larger liability reports intentionally bypass drift: delaying a real
+        // debt increase would overstate NAV. That makes a pending increase
+        // impossible to fee-bound, so opaque DEBT books cannot redeem instantly.
+        if self
+            .positions
+            .iter()
+            .any(|p| p.enabled() && p.required_in_aum() && p.debt())
+        {
+            return Err(unsafe_direct());
+        }
+
+        // Growth factor in bps, rounded up after every multiplication so the
+        // integer calculation can never understate composed capacity.
+        let mut growth_bps = 10_000u128;
+        let mut compound = |cap_bps: u64| -> Result<(), ProgramError> {
+            growth_bps = ceil_compound_bps(growth_bps, cap_bps).ok_or_else(unsafe_direct)?;
+            Ok(())
+        };
+
+        for position in self
+            .positions
+            .iter()
+            .filter(|p| p.enabled() && p.required_in_aum())
+        {
+            let cap = drift_budget(position.max_drift_bps.get()).ok_or_else(unsafe_direct)?;
+            compound(cap)?;
+        }
+
+        // A sink marked earlier in the same transaction is already nonzero by
+        // the time `redeem_direct` reaches this gate. Charge every occupant the
+        // worse of its first-mark and steady-state budgets so that committing a
+        // bootstrap cannot reclassify the slot down to the default drift cap.
+        // A waived bootstrap cap remains fail-closed even after first mark.
+        for _sink in self.sinks.iter().filter(|s| !s.is_free()) {
+            let bootstrap_cap =
+                drift_budget(self.sink_bootstrap_cap_bps.get()).ok_or_else(unsafe_direct)?;
+            compound(bootstrap_cap.max(MAX_DRIFT_BPS))?;
+        }
+
+        let capacity_bps = growth_bps.checked_sub(10_000).ok_or_else(unsafe_direct)?;
+        if capacity_bps > u128::from(fee_bps) {
+            return Err(unsafe_direct());
+        }
+        Ok(())
+    }
+}
+
+/// `value × (1 + cap_bps / 10_000)`, rounded up. `None` is an arithmetic
+/// overflow, which every caller maps to a fail-closed program error.
+#[inline]
+fn ceil_compound_bps(value: u128, cap_bps: u64) -> Option<u128> {
+    value
+        .checked_mul(10_000u128.saturating_add(u128::from(cap_bps)))?
+        .checked_add(9_999)?
+        .checked_div(10_000)
 }
 
 /// One pausable flow — each variant is a distinct bit in `Vault.paused`.
@@ -707,15 +819,19 @@ mod tests {
         crate::{
             constants::BOOTSTRAP_HWM_NAV,
             nav::{assets_for_redeem, shares_for_deposit},
+            state::{
+                ASSET_FLAG_MANUAL_PRICE, ASSET_FLAG_PRICE_IN_AUM, POSITION_FLAG_DEBT,
+                POSITION_FLAG_ENABLED, POSITION_FLAG_LENDER_ONLY, POSITION_FLAG_REQUIRED_IN_AUM,
+            },
         },
     };
 
     fn vault(aum: u64) -> Vault {
         let mut v: Vault = unsafe { core::mem::zeroed() };
-        v.aum = PodU64::from(aum);
-        v.hwm_nav = PodU128::from(BOOTSTRAP_HWM_NAV);
+        v.aum = U64::from(aum);
+        v.hwm_nav = U128::from(BOOTSTRAP_HWM_NAV);
         // A representative 10% curator rate; the protocol rate is additive.
-        v.performance_fee_bps = PodU16::from(1_000);
+        v.performance_fee_bps = U16::from(1_000);
         v
     }
 
@@ -765,7 +881,7 @@ mod tests {
     fn fee_dust_of_one_recipient_does_not_block_the_other() {
         let mut v = vault(BASE);
         let supply = BASE / 4; // ~4 numéraire units per share: 1 unit is dust
-        v.perf_fee_accrued = PodU64::from(4_001u64);
+        v.perf_fee_accrued = U64::from(4_001u64);
         // Protocol rates are 0 today, so hand-split the folded liability the
         // way a live protocol rate would.
         let fees = FeeBreakdown {
@@ -853,12 +969,12 @@ mod tests {
         let seized = Address::new_from_array([7; 32]);
 
         let sink = v.find_or_claim_sink(&seized).unwrap();
-        sink.value = PodU64::from(500 * UNIT);
+        sink.value = U64::from(500 * UNIT);
         sink.set_priced();
 
         v.sinks[0].write_off(1_000);
 
-        assert!(v.sinks[0].value.is_zero(), "the mark must leave AUM");
+        assert!(v.sinks[0].value.get() == 0, "the mark must leave AUM");
         assert!(v.sinks[0].holds(&seized), "the mint binding must survive");
         assert!(
             v.sinks[0].priced(),
@@ -876,7 +992,7 @@ mod tests {
     #[test]
     fn mint_headroom_counts_burned_redeem_shares() {
         let mut v = vault(BASE);
-        v.pending_redeem_shares = PodU64::from(1_000u64);
+        v.pending_redeem_shares = U64::from(1_000u64);
         let supply = u64::MAX - 1_000;
         // Token-2022 would allow this — `supply + 1_000` still fits.
         assert_eq!(
@@ -885,7 +1001,7 @@ mod tests {
         );
         assert_eq!(v.require_mint_headroom(supply, 0), Ok(()));
         // Without a queued redeem the same mint is fine.
-        v.pending_redeem_shares = PodU64::ZERO;
+        v.pending_redeem_shares = U64::ZERO;
         assert_eq!(v.require_mint_headroom(supply, 1_000), Ok(()));
         assert_eq!(v.eff_supply(supply), supply);
     }
@@ -900,7 +1016,7 @@ mod tests {
         assert_eq!(u64::from(v.perf_fee_accrued), 0);
 
         // NAV rises 10% → a fee accrues and the HWM ratchets.
-        v.aum = PodU64::from(BASE + 100 * UNIT);
+        v.aum = U64::from(BASE + 100 * UNIT);
         v.accrue_fees(SUPPLY, 0);
         let perf = u64::from(v.perf_fee_accrued);
         assert!(perf > 0, "a NAV rise must accrue a performance fee");
@@ -931,7 +1047,7 @@ mod tests {
         );
 
         // Ground above the HWM is still chargeable, not absorbed by a deficit.
-        v.aum = PodU64::from(BASE + 200 * UNIT);
+        v.aum = U64::from(BASE + 200 * UNIT);
         v.accrue_fees(supply, 0);
         assert!(
             u64::from(v.perf_fee_accrued) > 0,
@@ -943,7 +1059,7 @@ mod tests {
     fn recipient_share_rounding_cannot_be_repriced_as_performance() {
         const SUPPLY: u64 = 100_000_000;
         let mut v = vault(1_000_000_000);
-        v.performance_fee_bps = PodU16::from(750u16);
+        v.performance_fee_bps = U16::from(750u16);
 
         v.accrue_fees(SUPPLY, 0);
         assert!(
@@ -955,7 +1071,7 @@ mod tests {
 
         // With separate curator/protocol share floors, this fixture leaves a
         // measurable NAV rounding gain unless crystallization ratchets over it.
-        v.performance_fee_bps = PodU16::from(2_000u16);
+        v.performance_fee_bps = U16::from(2_000u16);
         v.accrue_fees(post_fee_supply, 0);
         assert_eq!(
             u64::from(v.perf_fee_accrued),
@@ -972,7 +1088,7 @@ mod tests {
 
         for mult in [1_050u64, 1_100, 1_100, 2_000, 1_500, 10_000] {
             let aum = BASE / 1_000 * mult;
-            v.aum = PodU64::from(aum);
+            v.aum = U64::from(aum);
             v.accrue_fees(SUPPLY, 0);
             let next = u128::from(v.hwm_nav);
             assert!(next >= hwm, "HWM fell from {hwm} to {next} at aum {aum}");
@@ -986,7 +1102,7 @@ mod tests {
         let old_supply = 1;
 
         // Real gain, too small for one numeraire unit at this supply.
-        v.aum = PodU64::from(10u64);
+        v.aum = U64::from(10u64);
         v.accrue_fees(old_supply, 0);
         assert_eq!(u64::from(v.perf_fee_accrued), 0);
         assert!(
@@ -997,7 +1113,7 @@ mod tests {
         // A stale HWM would multiply the forgiven dust by this larger supply.
         let deposit = BASE;
         let shares = shares_for_deposit(deposit, old_supply, v.eff_aum(old_supply, 0)).unwrap();
-        v.aum = PodU64::from(u64::from(v.aum).saturating_add(deposit));
+        v.aum = U64::from(u64::from(v.aum).saturating_add(deposit));
         v.accrue_fees(old_supply.saturating_add(shares), 0);
         assert_eq!(
             u64::from(v.perf_fee_accrued),
@@ -1024,11 +1140,11 @@ mod tests {
         // A final exit can leave fee integrals with no cohort to dilute. They
         // must not strand the next entry, and the HWM must be re-armed only
         // after their forgiveness changes fee-net AUM.
-        v.fee_capital_time = PodU128::from(1u128);
-        v.perf_fee_accrued = PodU64::from(UNIT);
+        v.fee_capital_time = U128::from(1u128);
+        v.perf_fee_accrued = U64::from(UNIT);
         v.accrue_fees(0, 0);
-        assert!(v.fee_capital_time.is_zero());
-        assert!(v.perf_fee_accrued.is_zero());
+        assert!(v.fee_capital_time.get() == 0);
+        assert!(v.perf_fee_accrued.get() == 0);
         let entry = v.nav_for_watermark(0, 0);
         assert_eq!(
             u128::from(v.hwm_nav),
@@ -1042,7 +1158,7 @@ mod tests {
 
         let deposit = BASE;
         let shares = shares_for_deposit(deposit, 0, v.eff_aum(0, 0)).expect("entry share math");
-        v.aum = PodU64::from(u64::from(v.aum) + deposit);
+        v.aum = U64::from(u64::from(v.aum) + deposit);
         v.accrue_fees(shares, 0);
         assert!(
             u64::from(v.perf_fee_accrued) <= deposit / 10_000,
@@ -1051,7 +1167,7 @@ mod tests {
         );
 
         // ...and a genuine rise on top of it still is.
-        v.aum = PodU64::from(u64::from(v.aum) * 3 / 2);
+        v.aum = U64::from(u64::from(v.aum) * 3 / 2);
         v.accrue_fees(shares, 0);
         assert!(
             u64::from(v.perf_fee_accrued) > deposit / 100,
@@ -1064,18 +1180,18 @@ mod tests {
         const YEAR: i64 = SECONDS_PER_YEAR as i64;
         let now = 5 * YEAR;
         let mut v = vault(BASE);
-        v.management_fee_bps = PodU16::from(1_000u16); // 10% + protocol management
+        v.management_fee_bps = U16::from(1_000u16); // 10% + protocol management
 
         // Five years of fee booked, then the cohort exits with a small backed
         // residual. An exactly insolvent book is not an ordinary entry path.
         v.accrue_fees(BASE, now);
-        v.aum = PodU64::from(v.accrued_fee_assets(now).saturating_add(UNIT));
+        v.aum = U64::from(v.accrued_fee_assets(now).saturating_add(UNIT));
         v.accrue_fees(0, now);
 
         // Re-entry, priced exactly as `deposit_basis` prices it.
         let deposit = BASE;
         let shares = shares_for_deposit(deposit, 0, v.eff_aum(0, now)).expect("entry share math");
-        v.aum = PodU64::from(u64::from(v.aum) + deposit);
+        v.aum = U64::from(u64::from(v.aum) + deposit);
         v.accrue_fees(shares, now);
         assert!(
             u64::from(v.perf_fee_accrued) <= deposit / 10_000,
@@ -1083,7 +1199,7 @@ mod tests {
         );
 
         // ...and a genuine rise on top of it still is.
-        v.aum = PodU64::from(u64::from(v.aum) * 2);
+        v.aum = U64::from(u64::from(v.aum) * 2);
         v.accrue_fees(shares, now);
         assert!(
             u64::from(v.perf_fee_accrued) > deposit / 100,
@@ -1103,8 +1219,8 @@ mod tests {
 
         let setup = || {
             let mut v = vault(AUM);
-            v.performance_fee_bps = PodU16::ZERO;
-            v.perf_fee_accrued = PodU64::from(DEBT);
+            v.performance_fee_bps = U16::ZERO;
+            v.perf_fee_accrued = U64::from(DEBT);
             v
         };
 
@@ -1115,7 +1231,7 @@ mod tests {
         let entrant_first =
             shares_for_deposit(DEPOSIT, SUPPLY, deposit_first.eff_aum(SUPPLY, 0)).unwrap();
         deposit_first.accrue_fees(SUPPLY, 0);
-        deposit_first.aum = PodU64::from(AUM + DEPOSIT);
+        deposit_first.aum = U64::from(AUM + DEPOSIT);
         let pre_fee_supply = SUPPLY + entrant_first;
         let (deposit_first_supply, deposit_first_fee_shares) =
             crystallize_booked(&mut deposit_first, pre_fee_supply, 0);
@@ -1136,7 +1252,7 @@ mod tests {
         )
         .unwrap();
         crystal_first.accrue_fees(supply_after_first_fee, 0);
-        crystal_first.aum = PodU64::from(AUM + DEPOSIT);
+        crystal_first.aum = U64::from(AUM + DEPOSIT);
         let supply_before_second_fee = supply_after_first_fee + entrant_second;
         let (crystal_first_supply, second_fee_shares) =
             crystallize_booked(&mut crystal_first, supply_before_second_fee, 0);
@@ -1184,7 +1300,7 @@ mod tests {
         // numéraire unit at 25 bps, but large enough for
         // the full window to accrue several whole units.
         let mut v = vault(BASE);
-        v.management_fee_bps = PodU16::from(25u16);
+        v.management_fee_bps = U16::from(25u16);
 
         let mut ground = 0u64;
         for t in 1..=600i64 {
@@ -1194,7 +1310,7 @@ mod tests {
 
         // The honest baseline: leave it alone and collect once at the end.
         let mut honest = vault(BASE);
-        honest.management_fee_bps = PodU16::from(25u16);
+        honest.management_fee_bps = U16::from(25u16);
         honest.accrue_fees(SUPPLY, 600);
         let collected = honest.take_fees().total();
 
@@ -1210,11 +1326,11 @@ mod tests {
     fn zero_protocol_rates_leave_management_and_performance_fees_with_curator() {
         const AUM: u64 = 1_000_000_000;
         let mut v = vault(AUM);
-        v.management_fee_bps = PodU16::from(75u16);
-        v.performance_fee_bps = PodU16::from(750u16);
-        v.fee_capital_time = PodU128::from(u128::from(AUM) * SECONDS_PER_YEAR);
+        v.management_fee_bps = U16::from(75u16);
+        v.performance_fee_bps = U16::from(750u16);
+        v.fee_capital_time = U128::from(u128::from(AUM) * SECONDS_PER_YEAR);
         // The entire booked claim, including its last unit, goes to the curator.
-        v.perf_fee_accrued = PodU64::from(100_000_001u64);
+        v.perf_fee_accrued = U64::from(100_000_001u64);
 
         let fees = v.take_fees();
         assert_eq!(
@@ -1227,16 +1343,16 @@ mod tests {
             }
         );
         assert_eq!(fees.total(), 107_500_001);
-        assert!(v.fee_capital_time.is_zero());
-        assert!(v.perf_fee_accrued.is_zero());
+        assert!(v.fee_capital_time.get() == 0);
+        assert!(v.perf_fee_accrued.get() == 0);
     }
 
     #[test]
     fn fee_rates_can_be_zero_independently() {
         for (management, performance) in [(0u16, 0u16), (0, 1_000), (100, 0), (100, 1_000)] {
             let mut v = vault(2 * BASE);
-            v.management_fee_bps = PodU16::from(management);
-            v.performance_fee_bps = PodU16::from(performance);
+            v.management_fee_bps = U16::from(management);
+            v.performance_fee_bps = U16::from(performance);
             let now = SECONDS_PER_YEAR as i64;
             v.accrue_fees(BASE, now);
             let liability = v.raw_fee_liability(BASE, now);
@@ -1245,8 +1361,8 @@ mod tests {
             assert_eq!(fees.curator_performance > 0, performance > 0);
             assert_eq!(fees.protocol_total(), 0);
             assert_eq!(fees.total(), liability);
-            assert!(v.fee_capital_time.is_zero());
-            assert!(v.perf_fee_accrued.is_zero());
+            assert!(v.fee_capital_time.get() == 0);
+            assert!(v.perf_fee_accrued.get() == 0);
             if management == 0 && performance == 0 {
                 assert_eq!(fees.total(), 0);
                 assert_eq!(v.eff_aum(BASE, now), 2 * BASE);
@@ -1261,12 +1377,12 @@ mod tests {
         let now = 5 * YEAR;
 
         let mut v = vault(BASE);
-        v.management_fee_bps = PodU16::from(1_000u16); // 10% + protocol management
+        v.management_fee_bps = U16::from(1_000u16); // 10% + protocol management
 
         // Five years uncrystallized, then a 95% drawdown: the previously
         // folded liability is much larger than the live book.
         v.accrue_fees(SUPPLY, now);
-        v.aum = PodU64::from(BASE / 20);
+        v.aum = U64::from(BASE / 20);
         let stranded = v.raw_fee_liability(SUPPLY, now);
         assert!(
             stranded > u64::from(v.aum),
@@ -1288,7 +1404,7 @@ mod tests {
         let took = v.take_fees().total();
         assert!(took > 0 && took <= cap, "collected {took}, cap {cap}");
         assert_eq!(v.accrued_fee_assets(now), 0);
-        assert!(v.perf_fee_accrued.is_zero());
+        assert!(v.perf_fee_accrued.get() == 0);
         assert_eq!(v.raw_fee_liability(SUPPLY, now), 0);
     }
 
@@ -1299,7 +1415,7 @@ mod tests {
         const DEPOSIT: u64 = 30 * UNIT;
 
         let mut v = vault(AUM);
-        v.perf_fee_accrued = PodU64::from(20 * UNIT);
+        v.perf_fee_accrued = U64::from(20 * UNIT);
         assert!(v.raw_fee_liability(SUPPLY, 0) > v.fee_payable_cap());
 
         let quoted_aum = v.eff_aum(SUPPLY, 0);
@@ -1323,18 +1439,18 @@ mod tests {
     fn reversed_performance_gain_is_written_down_to_the_live_cap() {
         const SUPPLY: u64 = BASE;
         let mut v = vault(BASE);
-        v.performance_fee_bps = PodU16::from(5_000u16);
+        v.performance_fee_bps = U16::from(5_000u16);
         v.accrue_fees(SUPPLY, 0);
 
         // A 3x mark books roughly one AUM of performance fees at 50%.
-        v.aum = PodU64::from(3 * BASE);
+        v.aum = U64::from(3 * BASE);
         v.accrue_fees(SUPPLY, 0);
         let peak_fee = u64::from(v.perf_fee_accrued);
         assert!(peak_fee > BASE / 2, "setup: peak fee {peak_fee}");
 
         // The gain reverses before crystallization. The old claim cannot stay
         // senior to the whole recovered principal.
-        v.aum = PodU64::from(BASE);
+        v.aum = U64::from(BASE);
         v.accrue_fees(SUPPLY, 0);
         assert!(u64::from(v.perf_fee_accrued) < peak_fee);
         assert!(v.raw_fee_liability(SUPPLY, 0) <= v.fee_payable_cap());
@@ -1357,10 +1473,10 @@ mod tests {
         const SUPPLY: u64 = BASE;
 
         let mut v = vault(BASE);
-        v.management_fee_bps = PodU16::from(25u16);
-        v.performance_fee_bps = PodU16::ZERO;
-        v.fee_capital_time = PodU128::from(u128::from(STREAMING) * DENOM / v.streaming_bps());
-        v.perf_fee_accrued = PodU64::from(PERF);
+        v.management_fee_bps = U16::from(25u16);
+        v.performance_fee_bps = U16::ZERO;
+        v.fee_capital_time = U128::from(u128::from(STREAMING) * DENOM / v.streaming_bps());
+        v.perf_fee_accrued = U64::from(PERF);
         v.write_down_unpayable_fees(SUPPLY, 0);
 
         assert_eq!(v.accrued_fee_assets(0), STREAMING);
@@ -1373,7 +1489,7 @@ mod tests {
         const SUPPLY: u64 = BASE;
         let mut v = vault(4 * BASE);
         let prior_hwm = u128::from(v.hwm_nav);
-        v.perf_fee_accrued = PodU64::from(3 * BASE);
+        v.perf_fee_accrued = U64::from(3 * BASE);
 
         v.write_down_unpayable_fees(SUPPLY, 0);
 
@@ -1453,7 +1569,7 @@ mod tests {
         v.charge_swap_slippage(budget, 0).unwrap();
 
         // AUM drops to 40%: the resized bucket is fully spent, not over-full.
-        v.aum = PodU64::from(BASE * 2 / 5);
+        v.aum = U64::from(BASE * 2 / 5);
         let small = ((BASE as u128 * 2 / 5) * MAX_SWAP_SLIPPAGE_PER_WINDOW_BPS / 10_000) as u64;
         v.charge_swap_slippage(0, 0)
             .expect("a zero-slippage swap must pass right after the shrink");
@@ -1481,12 +1597,165 @@ mod tests {
                 "entry NAV moved {drift_bps} bps at {deposit}"
             );
 
-            w.hwm_nav = PodU128::from(entry);
+            w.hwm_nav = U128::from(entry);
             w.accrue_fees(shares, 0);
             assert!(
                 u64::from(w.perf_fee_accrued) <= deposit / 10_000,
                 "principal charged as gain at deposit {deposit}"
             );
         }
+    }
+
+    #[test]
+    fn instant_mark_fee_gate_compounds_distinct_required_positions() {
+        let mut v: Vault = unsafe { core::mem::zeroed() };
+        for position in &mut v.positions[..2] {
+            position.flags = POSITION_FLAG_ENABLED | POSITION_FLAG_REQUIRED_IN_AUM;
+            // Stored zero is the ordinary MAX_DRIFT_BPS default.
+            position.max_drift_bps = U16::ZERO;
+        }
+
+        // Two independent 200 bps marks compose to 1.02^2 - 1 = 404 bps.
+        v.instant_redeem_fee_bps = U16::from(403u16);
+        assert_eq!(
+            v.require_instant_mark_fee_safe(),
+            Err(VaultError::InstantRedeemDisabled.into()),
+        );
+        v.instant_redeem_fee_bps = U16::from(404u16);
+        assert!(v.require_instant_mark_fee_safe().is_ok());
+
+        // The disabled marker skips only the finite-fee comparison.
+        v.instant_redeem_fee_bps = U16::from(u16::MAX);
+        assert!(v.require_instant_mark_fee_safe().is_ok());
+    }
+
+    #[test]
+    fn instant_mark_fee_gate_rejects_unbounded_required_position() {
+        let mut v: Vault = unsafe { core::mem::zeroed() };
+        v.instant_redeem_fee_bps = U16::from(1_000u16);
+        v.positions[0].flags = POSITION_FLAG_ENABLED | POSITION_FLAG_REQUIRED_IN_AUM;
+        // window_bps(Some(0)) stores the explicit waiver as u16::MAX.
+        v.positions[0].max_drift_bps = U16::from(u16::MAX);
+
+        assert_eq!(
+            v.require_instant_mark_fee_safe(),
+            Err(VaultError::InstantRedeemDisabled.into()),
+        );
+    }
+
+    #[test]
+    fn instant_mark_fee_gate_rejects_net_fluid_mark() {
+        let mut v: Vault = unsafe { core::mem::zeroed() };
+        v.instant_redeem_fee_bps = U16::from(10_000u16);
+        v.positions[0].protocol = Protocol::JupiterLend as u8;
+        v.positions[0].flags = POSITION_FLAG_ENABLED;
+        v.positions[0].last_value = U64::from(600u64);
+        assert!(v.require_instant_mark_fee_safe().is_ok());
+
+        v.positions[0].flags |= POSITION_FLAG_REQUIRED_IN_AUM;
+
+        assert_eq!(
+            v.require_instant_mark_fee_safe(),
+            Err(VaultError::InstantRedeemDisabled.into()),
+        );
+
+        v.positions[0].flags &= !POSITION_FLAG_REQUIRED_IN_AUM;
+        assert!(v.require_instant_mark_fee_safe().is_ok());
+    }
+
+    #[test]
+    fn instant_mark_fee_gate_admits_earn_only_mark_within_its_drift_cap() {
+        let mut v: Vault = unsafe { core::mem::zeroed() };
+        v.instant_redeem_fee_bps = U16::from(50u16);
+        v.positions[0].protocol = Protocol::JupiterLend as u8;
+        v.positions[0].flags =
+            POSITION_FLAG_ENABLED | POSITION_FLAG_REQUIRED_IN_AUM | POSITION_FLAG_LENDER_ONLY;
+        v.positions[0].max_drift_bps = U16::from(50u16);
+        assert!(v.require_instant_mark_fee_safe().is_ok());
+
+        // Earn-only lifts the Fluid block, not the aggregate drift bound.
+        v.positions[0].max_drift_bps = U16::from(51u16);
+        assert_eq!(
+            v.require_instant_mark_fee_safe(),
+            Err(VaultError::InstantRedeemDisabled.into()),
+        );
+    }
+
+    #[test]
+    fn instant_mark_fee_gate_compounds_each_sink_bootstrap() {
+        let mut v: Vault = unsafe { core::mem::zeroed() };
+        for (i, sink) in v.sinks[..2].iter_mut().enumerate() {
+            sink.mint = Address::new_from_array([i as u8 + 1; 32]);
+        }
+
+        // mark -> validate can be interleaved between zero sinks, so the second
+        // aggregate ceiling reads the AUM raised by the first: 404 bps total.
+        v.instant_redeem_fee_bps = U16::from(403u16);
+        assert_eq!(
+            v.require_instant_mark_fee_safe(),
+            Err(VaultError::InstantRedeemDisabled.into()),
+        );
+        v.instant_redeem_fee_bps = U16::from(404u16);
+        assert!(v.require_instant_mark_fee_safe().is_ok());
+
+        // A nonzero walk composes identically with a remaining bootstrap.
+        v.sinks[0].value = U64::from(1u64);
+        v.instant_redeem_fee_bps = U16::from(403u16);
+        assert_eq!(
+            v.require_instant_mark_fee_safe(),
+            Err(VaultError::InstantRedeemDisabled.into()),
+        );
+        v.instant_redeem_fee_bps = U16::from(404u16);
+        assert!(v.require_instant_mark_fee_safe().is_ok());
+    }
+
+    #[test]
+    fn instant_mark_fee_gate_keeps_the_bootstrap_budget_after_first_mark() {
+        let mut v: Vault = unsafe { core::mem::zeroed() };
+        v.sinks[0].mint = Address::new_from_array([1; 32]);
+        v.sinks[0].value = U64::from(1u64);
+        v.sink_bootstrap_cap_bps = U16::from(500u16);
+
+        v.instant_redeem_fee_bps = U16::from(499u16);
+        assert_eq!(
+            v.require_instant_mark_fee_safe(),
+            Err(VaultError::InstantRedeemDisabled.into()),
+        );
+        v.instant_redeem_fee_bps = U16::from(500u16);
+        assert!(v.require_instant_mark_fee_safe().is_ok());
+
+        // Marking a sink must not turn an unbounded bootstrap cap into 200 bps.
+        v.sink_bootstrap_cap_bps = U16::from(u16::MAX);
+        v.instant_redeem_fee_bps = U16::from(10_000u16);
+        assert_eq!(
+            v.require_instant_mark_fee_safe(),
+            Err(VaultError::InstantRedeemDisabled.into()),
+        );
+    }
+
+    #[test]
+    fn instant_mark_fee_gate_rejects_manual_and_debt_books_when_enabled() {
+        let mut manual: Vault = unsafe { core::mem::zeroed() };
+        manual.instant_redeem_fee_bps = U16::from(10_000u16);
+        manual.assets[0].mint = Address::new_from_array([1; 32]);
+        manual.assets[0].flags = ASSET_FLAG_PRICE_IN_AUM | ASSET_FLAG_MANUAL_PRICE;
+        assert_eq!(
+            manual.require_instant_mark_fee_safe(),
+            Err(VaultError::InstantRedeemDisabled.into()),
+        );
+
+        let mut debt: Vault = unsafe { core::mem::zeroed() };
+        debt.instant_redeem_fee_bps = U16::from(10_000u16);
+        debt.positions[0].flags =
+            POSITION_FLAG_ENABLED | POSITION_FLAG_REQUIRED_IN_AUM | POSITION_FLAG_DEBT;
+        assert_eq!(
+            debt.require_instant_mark_fee_safe(),
+            Err(VaultError::InstantRedeemDisabled.into()),
+        );
+
+        manual.instant_redeem_fee_bps = U16::from(u16::MAX);
+        debt.instant_redeem_fee_bps = U16::from(u16::MAX);
+        assert!(manual.require_instant_mark_fee_safe().is_ok());
+        assert!(debt.require_instant_mark_fee_safe().is_ok());
     }
 }

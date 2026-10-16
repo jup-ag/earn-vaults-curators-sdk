@@ -3,7 +3,7 @@ use {
         instructions::{SYSTEM_PROGRAM_ID, TOKEN_2022_PROGRAM_ID},
         pda::{ASSOCIATED_TOKEN_PROGRAM_ID, derive_share_mint, derive_vault_authority},
     },
-    earn_vaults_interface::{VaultInstruction, constants::EVENT_PDA, zeropod::pod::PodU64},
+    earn_vaults_interface::{VaultInstruction, constants::EVENT_PDA, zeropod::U64},
     solana_address::Address,
     solana_instruction::{AccountMeta, Instruction},
 };
@@ -40,8 +40,8 @@ impl SubscribeDirect {
         let share_mint = derive_share_mint(&self.vault);
         let vault_authority = derive_vault_authority(&self.vault);
 
-        let amount = PodU64::from(self.amount);
-        let min_shares_out = PodU64::from(self.min_shares_out);
+        let amount = U64::from(self.amount);
+        let min_shares_out = U64::from(self.min_shares_out);
         let data = super::encode(&VaultInstruction::SubscribeDirect {
             amount: &amount,
             min_shares_out: &min_shares_out,

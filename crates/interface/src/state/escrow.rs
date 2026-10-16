@@ -4,7 +4,7 @@ use {
     solana_address::Address,
     solana_program_error::ProgramError,
     wincode::{SchemaRead, SchemaWrite, ZeroCopy},
-    zeropod::pod::{PodI64, PodU64},
+    zeropod::{I64, U64},
 };
 
 pub const FULFILLED_PENDING: u8 = 0;
@@ -16,8 +16,8 @@ pub const FULFILLED_PARTIAL: u8 = 2;
 #[wincode(assert_zero_copy)]
 #[repr(C)]
 pub struct LegacyEscrow {
-    pub amount: PodU64,
-    pub created_at: PodI64,
+    pub amount: U64,
+    pub created_at: I64,
     pub owner: Address,
     pub vault: Address,
     pub request_type: u8,
@@ -25,8 +25,8 @@ pub struct LegacyEscrow {
     pub bump: u8,
     pub ta_bump: u8,
     pub share_ta_bump: u8,
-    pub unlock_at: PodI64,
-    pub nonce: PodU64,
+    pub unlock_at: I64,
+    pub nonce: U64,
 }
 
 impl Account for LegacyEscrow {
@@ -41,9 +41,9 @@ check_account_layout!(LegacyEscrow);
 #[repr(C)]
 pub struct Escrow {
     #[codama(type = number(u64))]
-    pub amount: PodU64,
+    pub amount: U64,
     #[codama(type = number(i64))]
-    pub created_at: PodI64,
+    pub created_at: I64,
     pub owner: Address,
     pub vault: Address,
     pub request_type: u8,
@@ -52,15 +52,15 @@ pub struct Escrow {
     pub ta_bump: u8,
     pub share_ta_bump: u8,
     #[codama(type = number(i64))]
-    pub unlock_at: PodI64,
+    pub unlock_at: I64,
     #[codama(type = number(u64))]
-    pub nonce: PodU64,
+    pub nonce: U64,
     /// Minimum shares for a deposit; minimum tokens for the original redeem.
     #[codama(type = number(u64))]
-    pub min_out: PodU64,
+    pub min_out: U64,
     /// Fixed denominator for redeem partial fills; zero for deposits and migrated requests.
     #[codama(type = number(u64))]
-    pub original_shares: PodU64,
+    pub original_shares: U64,
     /// User-selected redemption token; zero for deposits and migrated requests.
     pub payout_mint: Address,
 }

@@ -2,7 +2,7 @@ use {
     codama_macros::CodamaEvent,
     solana_address::Address,
     wincode::{SchemaRead, SchemaWrite},
-    zeropod::pod::PodU64,
+    zeropod::U64,
 };
 
 // VaultEvent::RedeemRequested = 5.
@@ -13,7 +13,7 @@ use {
 pub struct RedeemRequested {
     pub owner: Address,
     #[codama(type = number(u64))]
-    pub shares_burned: PodU64,
+    pub shares_burned: U64,
 }
 
 // VaultEvent::RedeemFulfilled = 6.
@@ -24,9 +24,9 @@ pub struct RedeemRequested {
 pub struct RedeemFulfilled {
     pub owner: Address,
     #[codama(type = number(u64))]
-    pub amount_paid: PodU64,
+    pub amount_paid: U64,
     #[codama(type = number(u64))]
-    pub remaining: PodU64,
+    pub remaining: U64,
 }
 
 // VaultEvent::Redeemed = 7.
@@ -37,7 +37,7 @@ pub struct RedeemFulfilled {
 pub struct Redeemed {
     pub owner: Address,
     #[codama(type = number(u64))]
-    pub amount: PodU64,
+    pub amount: U64,
 }
 
 // VaultEvent::RedeemedInstant = 10.
@@ -48,11 +48,11 @@ pub struct Redeemed {
 pub struct RedeemedInstant {
     pub owner: Address,
     #[codama(type = number(u64))]
-    pub shares_burned: PodU64,
+    pub shares_burned: U64,
     #[codama(type = number(u64))]
-    pub amount_paid: PodU64,
+    pub amount_paid: U64,
     #[codama(type = number(u64))]
-    pub fee_shares: PodU64,
+    pub fee_shares: U64,
 }
 
 // VaultEvent::RedeemCancelled = 8.
@@ -63,5 +63,5 @@ pub struct RedeemedInstant {
 pub struct RedeemCancelled {
     pub owner: Address,
     #[codama(type = number(u64))]
-    pub shares_reminted: PodU64,
+    pub shares_reminted: U64,
 }

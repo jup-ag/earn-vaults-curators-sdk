@@ -9,11 +9,13 @@
 //! selector) when a vault needs to fan out to several chains.
 
 use {
+    crate::encoding,
     codama_macros::CodamaType,
+    encoding::{ZcElem, ZcValidate, ZeroPodError},
     solana_address::Address,
     solana_program_error::ProgramError,
     wincode::{SchemaRead, SchemaWrite},
-    zeropod::{ZcElem, ZcValidate, error::ZeroPodError, pod::PodU64},
+    zeropod::U64,
 };
 
 #[derive(SchemaRead, SchemaWrite, Clone, Copy, CodamaType)]
@@ -23,7 +25,7 @@ pub struct CcipLane {
     /// CCIP chain selector of the destination (e.g. Ethereum mainnet
     /// `5009297550715157269`); `0` disables bridging.
     #[codama(type = number(u64))]
-    pub dest_chain_selector: PodU64,
+    pub dest_chain_selector: U64,
     /// The exact 32-byte `SVM2AnyMessage.receiver`. An EVM address is
     /// left-padded with 12 zero bytes, as CCIP encodes it.
     pub receiver: Address,
@@ -42,14 +44,14 @@ unsafe impl ZcElem for CcipLane {}
 impl CcipLane {
     pub const fn zero() -> Self {
         Self {
-            dest_chain_selector: PodU64::ZERO,
+            dest_chain_selector: U64::ZERO,
             receiver: Address::new_from_array([0; 32]),
         }
     }
 
     #[inline]
     pub fn enabled(&self) -> bool {
-        !self.dest_chain_selector.is_zero()
+        self.dest_chain_selector.get() != 0
     }
 
     /// An enabled lane must name a receiver: the zero address is a burn on

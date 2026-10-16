@@ -2,7 +2,7 @@ use {
     codama_macros::CodamaEvent,
     solana_address::Address,
     wincode::{SchemaRead, SchemaWrite},
-    zeropod::pod::PodU64,
+    zeropod::U64,
 };
 
 pub const FLASH_DIRECTION_DEPOSIT: u8 = 0;
@@ -18,6 +18,6 @@ pub struct FlashMoved {
     pub operator: Address,
     pub mint: Address,
     #[codama(type = number(u64))]
-    pub amount: PodU64,
+    pub amount: U64,
     pub direction: u8,
 }
