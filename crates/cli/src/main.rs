@@ -21,6 +21,7 @@ use {
         ID as PROGRAM_ID,
         arguments::{PositionAdd, PositionInit},
         constants::{CCIP_ROUTER_ID, CCTP_TOKEN_MESSENGER_MINTER_V2_ID, NEST_OFT_ID},
+        encoding::PodOption,
         instructions::{
             AcceptCurator, AssetAddFields, AssetUpdateFields, CancelPartialRedeem, CancelRedeem,
             ClaimFees, ClaimRedeem, CrystallizeFees, FulfillRedeem, GrantRevokeDelegate,
@@ -32,8 +33,11 @@ use {
             derive_associated_token_account, derive_share_mint, derive_vault,
             derive_vault_authority,
         },
-        state::{CcipLane, CollateralTerms, GENERAL_COLLATERAL, LoanLimits, NestRoute, Protocol},
-        zeropod::pod::{PodOption, PodU16, PodU32},
+        state::{
+            Account as StateAccount, CcipLane, CollateralTerms, GENERAL_COLLATERAL, LoanLimits,
+            NestRoute, Protocol, Vault,
+        },
+        zeropod::{U16, U32},
     },
     serde::{Deserialize, Serialize},
     serde_json::{Value, json},
@@ -295,6 +299,15 @@ enum Cmd {
         /// Feed id the new row pins on; omit for a hand-priced row.
         #[arg(long, value_name = "FEED", requires = "add_asset_mint")]
         add_asset_feed_id: Option<String>,
+        /// Pyth `PriceUpdateV2` or legacy OCR2 store account for refreshes.
+        /// Required with either feed type; omit for Data Streams.
+        #[arg(
+            long,
+            value_name = "ACCOUNT",
+            requires = "add_asset_feed_id",
+            conflicts_with = "add_asset_chainlink"
+        )]
+        add_asset_oracle: Option<String>,
         /// Read the new row's feed id as Chainlink Data Streams, not Pyth.
         #[arg(long, requires = "add_asset_feed_id")]
         add_asset_chainlink: bool,
@@ -637,15 +650,89 @@ struct State {
     /// Quote-leg `PriceUpdateV2` accounts of composed rows, by asset index.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     quote_oracles: BTreeMap<u8, String>,
+    /// Rows added after initialization, keyed by their on-chain slot.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    additional_assets: Vec<AdditionalAsset>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct AdditionalAsset {
+    index: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    oracle: Option<String>,
+    custody: String,
 }
 
 impl State {
-    /// Every `PriceUpdateV2` a refresh must carry: base, other, then the quote
-    /// legs of composed rows (deduped — a quote may share another row's feed).
+    fn reindex_additional_assets(&mut self, url: &str, mints: &[Option<Address>]) -> Result<()> {
+        if self.additional_assets.is_empty() {
+            return Ok(());
+        }
+        let authority = addr(&self.authority)?;
+        let mut indices = BTreeMap::new();
+        for (index, mint) in mints.iter().enumerate() {
+            if let Some(mint) = mint {
+                let token_program = mint_token_program(url, mint)?;
+                let custody = derive_associated_token_account(&authority, mint, &token_program);
+                indices.insert(custody.to_string(), index as u8);
+            }
+        }
+        self.additional_assets.retain_mut(|asset| {
+            if let Some(index) = indices.get(&asset.custody) {
+                asset.index = *index;
+                true
+            } else {
+                false
+            }
+        });
+        Ok(())
+    }
+
+    fn add_asset(&mut self, index: u8, custody: String, oracle: Option<String>) {
+        self.additional_assets
+            .retain(|asset| asset.custody != custody);
+        self.additional_assets.push(AdditionalAsset {
+            index,
+            oracle,
+            custody,
+        });
+    }
+
+    fn retire_asset(&mut self, index: u8, custody: &str) {
+        self.additional_assets
+            .retain(|asset| asset.custody != custody);
+        self.quote_oracles.remove(&index);
+        if index == 1 {
+            self.other_mint.clear();
+            self.other_oracle.clear();
+            self.vault_other.clear();
+        }
+    }
+
+    fn ordered_additional_assets(&self) -> Vec<&AdditionalAsset> {
+        let mut assets: Vec<_> = self.additional_assets.iter().collect();
+        assets.sort_by_key(|asset| asset.index);
+        assets
+    }
+
+    /// Every price account a refresh must carry: base, other, added rows,
+    /// then quote legs (deduped — a quote may share another row's feed).
     fn oracles(&self) -> Result<Vec<Address>> {
         let mut out = vec![addr(&self.base_oracle)?];
         if !self.vault_other.is_empty() {
             out.push(addr(&self.other_oracle)?);
+        }
+        for asset in self.ordered_additional_assets() {
+            if let Some(account) = asset
+                .oracle
+                .as_deref()
+                .filter(|account| !account.is_empty())
+            {
+                let oracle = addr(account)?;
+                if !out.contains(&oracle) {
+                    out.push(oracle);
+                }
+            }
         }
         for o in self.quote_oracles.values() {
             let o = addr(o)?;
@@ -732,7 +819,7 @@ fn parse_position(spec: &str) -> Result<(u8, PositionInit)> {
     }
     // STALENESS and DRIFT are three-way: empty leaves the program default, `0`
     // is the loosest setting, anything else is the value.
-    fn opt<T: std::str::FromStr, P: Copy + From<T>>(
+    fn opt<T: std::str::FromStr, P: earn_vaults_interface::encoding::ZcElem + From<T>>(
         f: &[&str],
         i: usize,
         what: &str,
@@ -754,8 +841,8 @@ fn parse_position(spec: &str) -> Result<(u8, PositionInit)> {
         PositionInit {
             protocol: tag,
             flags: n(&f, 2, "flags")?,
-            max_staleness_seconds: opt::<u32, PodU32>(&f, 3, "staleness")?,
-            max_drift_bps: opt::<u16, PodU16>(&f, 4, "drift")?,
+            max_staleness_seconds: opt::<u32, U32>(&f, 3, "staleness")?,
+            max_drift_bps: opt::<u16, U16>(&f, 4, "drift")?,
         },
     ))
 }
@@ -863,6 +950,25 @@ fn load_state(path: &PathBuf) -> Result<State> {
     Ok(serde_json::from_slice(&bytes)?)
 }
 
+fn vault_asset_mints(url: &str, vault: &Address) -> Result<Vec<Option<Address>>> {
+    let response = rpc(
+        url,
+        "getAccountInfo",
+        json!([vault.to_string(), {"encoding": "base64", "commitment": "confirmed"}]),
+    )?;
+    let encoded = response["value"]["data"][0]
+        .as_str()
+        .ok_or_else(|| anyhow!("vault {vault} not found"))?;
+    let data = B64.decode(encoded)?;
+    let vault =
+        <Vault as StateAccount>::read(&data).map_err(|error| anyhow!("decode vault: {error:?}"))?;
+    Ok(vault
+        .assets
+        .iter()
+        .map(|asset| asset.configured().then_some(asset.mint))
+        .collect())
+}
+
 fn save_state(path: &PathBuf, s: &State) -> Result<()> {
     std::fs::write(path, serde_json::to_vec_pretty(s)?)?;
     Ok(())
@@ -955,6 +1061,9 @@ fn validate_ixs(st: &State, url: &str, user: Address) -> Result<Vec<Instruction>
     let mut custody_token_accounts = vec![st.vault_base_ata(url)?];
     if !st.vault_other.is_empty() {
         custody_token_accounts.push(addr(&st.vault_other)?);
+    }
+    for asset in st.ordered_additional_assets() {
+        custody_token_accounts.push(addr(&asset.custody)?);
     }
     let price_updates = st.oracles()?;
     Ok(vec![
@@ -1440,6 +1549,7 @@ fn run_update_vault(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
         instant_redeem_fee_bps,
         add_asset_mint,
         add_asset_feed_id,
+        add_asset_oracle,
         add_asset_chainlink,
         add_asset_report_decimals,
         add_asset_deposit_enabled,
@@ -1497,6 +1607,16 @@ fn run_update_vault(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
             })
         })
         .transpose()?;
+    if add_asset
+        .as_ref()
+        .is_some_and(|asset| asset.oracle != Address::default() && !asset.chainlink)
+        && add_asset_oracle.is_none()
+    {
+        bail!("--add-asset-feed-id needs --add-asset-oracle for a Pyth or legacy OCR2 row");
+    }
+    if let Some(account) = add_asset_oracle.as_deref() {
+        addr(account)?;
+    }
     let add_position = add_position
         .as_deref()
         .map(parse_position)
@@ -1520,6 +1640,30 @@ fn run_update_vault(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
         }
         _ => None,
     };
+    let retired_asset = remove_asset
+        .as_ref()
+        .map(|asset| (asset.index, asset.custody.to_string()));
+    let asset_mints = if add_asset.is_some() || retired_asset.is_some() {
+        let mints = vault_asset_mints(url, &addr(&st.vault)?)?;
+        st.reindex_additional_assets(url, &mints)?;
+        Some(mints)
+    } else {
+        None
+    };
+    let added_asset = add_asset
+        .as_ref()
+        .map(|asset| -> Result<_> {
+            let index = asset_mints
+                .as_ref()
+                .and_then(|mints| mints.iter().position(Option::is_none))
+                .ok_or_else(|| anyhow!("vault has no free asset slot"))?
+                as u8;
+            let token_program = mint_token_program(url, &asset.mint)?;
+            let custody =
+                derive_associated_token_account(&addr(&st.authority)?, &asset.mint, &token_program);
+            Ok((index, custody.to_string(), add_asset_oracle.clone()))
+        })
+        .transpose()?;
     // Protocol policies are their own accounts now: each flag becomes a
     // `SetProtocolPolicy` in the same transaction; `disabled` closes it.
     let (curator_key, vault_key) = (curator_kp.pubkey(), addr(&st.vault)?);
@@ -1607,11 +1751,20 @@ fn run_update_vault(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
         "vault updated ({})",
         send_opts(url, &ixs, &[&curator_kp], &[], false)?
     );
+    let save = quote_update.is_some() || retired_asset.is_some() || added_asset.is_some();
     if let Some((index, account)) = quote_update {
         match account {
             Some(a) => st.quote_oracles.insert(index, a),
             None => st.quote_oracles.remove(&index),
         };
+    }
+    if let Some((index, custody)) = retired_asset {
+        st.retire_asset(index, &custody);
+    }
+    if let Some((index, custody, oracle)) = added_asset {
+        st.add_asset(index, custody, oracle);
+    }
+    if save {
         save_state(ctx.state_path, &st)?;
     }
     Ok(())
@@ -2098,6 +2251,7 @@ mod tests {
             "user_share": "user-share",
             "vault_base": "vault-base",
             "vault_other": "vault-other",
+            "additional_assets": [{"index": 2, "oracle": "added-oracle", "custody": "added-custody"}],
         });
 
         let state: State = serde_json::from_value(legacy.clone()).unwrap();
@@ -2106,6 +2260,11 @@ mod tests {
         assert_eq!(state.base_oracle, "base-oracle");
         assert_eq!(state.other_oracle, "other-oracle");
         assert_eq!(state.vault_other, "vault-other");
+        assert_eq!(state.additional_assets[0].index, 2);
+        assert_eq!(
+            state.additional_assets[0].oracle.as_deref(),
+            Some("added-oracle")
+        );
 
         let encoded = serde_json::to_value(state).unwrap();
         let mut current = legacy;
@@ -2115,14 +2274,22 @@ mod tests {
         assert_eq!(encoded, current);
         assert!(encoded.get("usdc_mint").is_none());
         assert!(encoded.get("cbbtc_mint").is_none());
+
+        let mut missing_index = current;
+        missing_index["additional_assets"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("index");
+        assert!(serde_json::from_value::<State>(missing_index).is_err());
     }
 
     #[test]
     fn state_oracles_carry_quote_legs() {
-        let (base, other, quote) = (
+        let (base, other, added, quote) = (
             Address::new_from_array([1; 32]).to_string(),
             Address::new_from_array([2; 32]).to_string(),
             Address::new_from_array([3; 32]).to_string(),
+            Address::new_from_array([4; 32]).to_string(),
         );
         let mut state = State {
             base_oracle: base.clone(),
@@ -2130,6 +2297,11 @@ mod tests {
             vault_other: "vault-other".into(),
             ..Default::default()
         };
+        state.additional_assets.push(AdditionalAsset {
+            index: 2,
+            oracle: Some(added.clone()),
+            custody: "added-custody".into(),
+        });
         // A shared feed is sent once; a distinct quote account is appended.
         state.quote_oracles.insert(0, other.clone());
         state.quote_oracles.insert(1, quote.clone());
@@ -2139,7 +2311,136 @@ mod tests {
             .iter()
             .map(|a| a.to_string())
             .collect();
-        assert_eq!(oracles, [base, other, quote]);
+        assert_eq!(oracles, [base, other, added, quote]);
+    }
+
+    #[test]
+    fn retiring_added_asset_keeps_later_row_in_order() {
+        let [base, removed, kept, removed_quote, kept_quote] =
+            std::array::from_fn(|i| Address::new_from_array([(i + 1) as u8; 32]).to_string());
+        let mut state = State {
+            base_oracle: base.clone(),
+            additional_assets: vec![
+                AdditionalAsset {
+                    index: 1,
+                    oracle: Some(removed),
+                    custody: "first-custody".into(),
+                },
+                AdditionalAsset {
+                    index: 2,
+                    oracle: Some(kept.clone()),
+                    custody: "second-custody".into(),
+                },
+            ],
+            ..Default::default()
+        };
+        state.quote_oracles.insert(1, removed_quote);
+        state.quote_oracles.insert(2, kept_quote.clone());
+
+        state.retire_asset(1, "first-custody");
+
+        assert_eq!(state.additional_assets.len(), 1);
+        assert_eq!(state.additional_assets[0].custody, "second-custody");
+        assert!(!state.quote_oracles.contains_key(&1));
+        state.add_asset(1, "new-custody".into(), None);
+        assert_eq!(
+            state
+                .ordered_additional_assets()
+                .iter()
+                .map(|asset| asset.custody.as_str())
+                .collect::<Vec<_>>(),
+            ["new-custody", "second-custody"]
+        );
+        assert_eq!(
+            state
+                .oracles()
+                .unwrap()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            [base, kept, kept_quote]
+        );
+    }
+
+    #[test]
+    fn retiring_initial_other_asset_clears_its_state() {
+        let base = Address::new_from_array([1; 32]).to_string();
+        let other = Address::new_from_array([2; 32]).to_string();
+        let mut state = State {
+            base_oracle: base.clone(),
+            other_mint: "other-mint".into(),
+            other_oracle: other,
+            vault_other: "other-custody".into(),
+            ..Default::default()
+        };
+
+        state.retire_asset(1, "other-custody");
+
+        assert!(state.other_mint.is_empty());
+        assert!(state.other_oracle.is_empty());
+        assert!(state.vault_other.is_empty());
+        assert_eq!(state.oracles().unwrap(), [addr(&base).unwrap()]);
+    }
+
+    #[test]
+    fn manual_added_asset_persists_without_an_oracle() {
+        let base = Address::new_from_array([1; 32]).to_string();
+        let mut state = State {
+            base_oracle: base.clone(),
+            ..Default::default()
+        };
+        state.add_asset(1, "manual-custody".into(), None);
+
+        let restored: State = serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
+
+        assert_eq!(restored.additional_assets[0].index, 1);
+        assert_eq!(restored.additional_assets[0].custody, "manual-custody");
+        assert_eq!(restored.additional_assets[0].oracle, None);
+        assert_eq!(restored.oracles().unwrap(), [addr(&base).unwrap()]);
+    }
+
+    #[test]
+    fn update_vault_cli_accepts_added_oracle_account() {
+        let cli = Cli::try_parse_from([
+            "vault",
+            "update-vault",
+            "--curator",
+            "curator.json",
+            "--add-asset-mint",
+            "mint",
+            "--add-asset-feed-id",
+            "feed",
+            "--add-asset-oracle",
+            "price-update",
+        ])
+        .unwrap();
+        let Cmd::UpdateVault {
+            add_asset_oracle, ..
+        } = cli.cmd
+        else {
+            panic!("parsed the wrong command")
+        };
+        assert_eq!(add_asset_oracle.as_deref(), Some("price-update"));
+    }
+
+    #[test]
+    fn data_streams_add_rejects_oracle_account() {
+        assert!(
+            Cli::try_parse_from([
+                "vault",
+                "update-vault",
+                "--curator",
+                "curator.json",
+                "--add-asset-mint",
+                "mint",
+                "--add-asset-feed-id",
+                "feed",
+                "--add-asset-chainlink",
+                "--add-asset-oracle",
+                "price-update",
+            ])
+            .is_err()
+        );
     }
 
     #[test]

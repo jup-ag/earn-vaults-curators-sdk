@@ -11,7 +11,7 @@ use {
         error::ReadError,
         io::{Reader, Writer},
     },
-    zeropod::pod::PodU64,
+    zeropod::U64,
 };
 
 #[derive(CodamaInstructions)]
@@ -54,11 +54,11 @@ pub enum VaultInstruction<'de> {
     #[codama(account(name = "program"))]
     Subscribe {
         #[codama(type = number(u64))]
-        amount: &'de PodU64,
+        amount: &'de U64,
         #[codama(type = number(u64))]
-        nonce: &'de PodU64,
+        nonce: &'de U64,
         #[codama(type = number(u64))]
-        min_shares_out: &'de PodU64,
+        min_shares_out: &'de U64,
     },
     #[codama(account(name = "authority", signer, writable))]
     #[codama(account(name = "delegate"))]
@@ -130,7 +130,7 @@ pub enum VaultInstruction<'de> {
     #[codama(account(name = "systemProgram"))]
     GrantRevokeDelegate {
         #[codama(type = number(u64))]
-        permissions: &'de PodU64,
+        permissions: &'de U64,
     },
     #[codama(account(name = "user", signer, writable))]
     #[codama(account(name = "userShareAccount", writable))]
@@ -141,13 +141,14 @@ pub enum VaultInstruction<'de> {
     #[codama(account(name = "token2022"))]
     #[codama(account(name = "eventAuthority"))]
     #[codama(account(name = "program"))]
+    #[codama(account(name = "vaultAuthority"))]
     Redeem {
         #[codama(type = number(u64))]
-        shares: &'de PodU64,
+        shares: &'de U64,
         #[codama(type = number(u64))]
-        nonce: &'de PodU64,
+        nonce: &'de U64,
         #[codama(type = number(u64))]
-        min_out: &'de PodU64,
+        min_out: &'de U64,
         payout_mint: &'de Address,
     },
     #[codama(account(name = "authority", signer, writable))]
@@ -206,9 +207,9 @@ pub enum VaultInstruction<'de> {
     #[codama(account(name = "program"))]
     SubscribeDirect {
         #[codama(type = number(u64))]
-        amount: &'de PodU64,
+        amount: &'de U64,
         #[codama(type = number(u64))]
-        min_shares_out: &'de PodU64,
+        min_shares_out: &'de U64,
     },
     #[codama(account(name = "signer", signer, writable))]
     #[codama(account(name = "vault", writable))]
@@ -236,9 +237,9 @@ pub enum VaultInstruction<'de> {
     #[codama(account(name = "program"))]
     RedeemDirect {
         #[codama(type = number(u64))]
-        shares: &'de PodU64,
+        shares: &'de U64,
         #[codama(type = number(u64))]
-        min_out: &'de PodU64,
+        min_out: &'de U64,
     },
     #[codama(account(name = "signer", signer))]
     #[codama(account(name = "delegate"))]
@@ -271,6 +272,11 @@ pub enum VaultInstruction<'de> {
     SweepIdle,
     #[codama(account(name = "vault", writable))]
     #[codama(account(name = "user", signer))]
+    /// Empty reports read Core/OCR2 accounts; legacy nonempty reports are
+    /// Chainlink frames. A [0, 0, 1] prefix selects the signed Pro envelope in
+    /// `pyth_pro::ProRefreshPayload`. Pro requires a writable user and five
+    /// remaining accounts before the legacy accounts: verifier, storage,
+    /// writable treasury, system program, instructions sysvar.
     RefreshPrices {
         #[codama(type = bytes)]
         #[codama(size_prefix = number(u64))]
@@ -288,7 +294,7 @@ pub enum VaultInstruction<'de> {
     #[codama(account(name = "program"))]
     FlashDeposit {
         #[codama(type = number(u64))]
-        amount: &'de PodU64,
+        amount: &'de U64,
     },
     #[codama(account(name = "signer", signer))]
     #[codama(account(name = "delegate"))]
@@ -303,7 +309,7 @@ pub enum VaultInstruction<'de> {
     #[codama(account(name = "program"))]
     FlashWithdraw {
         #[codama(type = number(u64))]
-        amount: &'de PodU64,
+        amount: &'de U64,
     },
     #[codama(account(name = "signer", signer, writable))]
     #[codama(account(name = "vault"))]
@@ -371,9 +377,9 @@ unsafe impl<'de, C: Config> SchemaRead<'de, C> for VaultInstruction<'de> {
             },
             2 => Self::CloseVault,
             3 => Self::Subscribe {
-                amount: <&PodU64 as SchemaRead<'de, C>>::get(reader.by_ref())?,
-                nonce: <&PodU64 as SchemaRead<'de, C>>::get(reader.by_ref())?,
-                min_shares_out: <&PodU64 as SchemaRead<'de, C>>::get(reader)?,
+                amount: <&U64 as SchemaRead<'de, C>>::get(reader.by_ref())?,
+                nonce: <&U64 as SchemaRead<'de, C>>::get(reader.by_ref())?,
+                min_shares_out: <&U64 as SchemaRead<'de, C>>::get(reader)?,
             },
             4 => Self::Fulfill,
             5 => Self::Claim,
@@ -386,12 +392,12 @@ unsafe impl<'de, C: Config> SchemaRead<'de, C> for VaultInstruction<'de> {
                 paused: <&u8 as SchemaRead<'de, C>>::get(reader)?,
             },
             10 => Self::GrantRevokeDelegate {
-                permissions: <&PodU64 as SchemaRead<'de, C>>::get(reader)?,
+                permissions: <&U64 as SchemaRead<'de, C>>::get(reader)?,
             },
             11 => Self::Redeem {
-                shares: <&PodU64 as SchemaRead<'de, C>>::get(reader.by_ref())?,
-                nonce: <&PodU64 as SchemaRead<'de, C>>::get(reader.by_ref())?,
-                min_out: <&PodU64 as SchemaRead<'de, C>>::get(reader.by_ref())?,
+                shares: <&U64 as SchemaRead<'de, C>>::get(reader.by_ref())?,
+                nonce: <&U64 as SchemaRead<'de, C>>::get(reader.by_ref())?,
+                min_out: <&U64 as SchemaRead<'de, C>>::get(reader.by_ref())?,
                 payout_mint: <&Address as SchemaRead<'de, C>>::get(reader)?,
             },
             12 => Self::FulfillRedeem,
@@ -401,13 +407,13 @@ unsafe impl<'de, C: Config> SchemaRead<'de, C> for VaultInstruction<'de> {
                 args: <&PriceOpaqueArgs as SchemaRead<'de, C>>::get(reader)?,
             },
             16 => Self::SubscribeDirect {
-                amount: <&PodU64 as SchemaRead<'de, C>>::get(reader.by_ref())?,
-                min_shares_out: <&PodU64 as SchemaRead<'de, C>>::get(reader)?,
+                amount: <&U64 as SchemaRead<'de, C>>::get(reader.by_ref())?,
+                min_shares_out: <&U64 as SchemaRead<'de, C>>::get(reader)?,
             },
             17 => Self::CrystallizeFees,
             18 => Self::RedeemDirect {
-                shares: <&PodU64 as SchemaRead<'de, C>>::get(reader.by_ref())?,
-                min_out: <&PodU64 as SchemaRead<'de, C>>::get(reader)?,
+                shares: <&U64 as SchemaRead<'de, C>>::get(reader.by_ref())?,
+                min_out: <&U64 as SchemaRead<'de, C>>::get(reader)?,
             },
             19 => Self::SetPaused {
                 flags: <&u8 as SchemaRead<'de, C>>::get(reader)?,
@@ -421,10 +427,10 @@ unsafe impl<'de, C: Config> SchemaRead<'de, C> for VaultInstruction<'de> {
                 reports: <&[u8] as SchemaRead<'de, C>>::get(reader)?,
             },
             24 => Self::FlashDeposit {
-                amount: <&PodU64 as SchemaRead<'de, C>>::get(reader)?,
+                amount: <&U64 as SchemaRead<'de, C>>::get(reader)?,
             },
             25 => Self::FlashWithdraw {
-                amount: <&PodU64 as SchemaRead<'de, C>>::get(reader)?,
+                amount: <&U64 as SchemaRead<'de, C>>::get(reader)?,
             },
             26 => Self::ClaimFees,
             27 => Self::PrepareNestRedeem,
@@ -435,6 +441,15 @@ unsafe impl<'de, C: Config> SchemaRead<'de, C> for VaultInstruction<'de> {
             254 => Self::Event,
             tag => return Err(ReadError::InvalidTagEncoding(tag as usize)),
         };
+        // Borrowed wincode reads do not run the fixed fields' semantic checks.
+        use crate::encoding::ZcValidate;
+        match &value {
+            Self::InitializeVault { args } => InitializeVaultArgs::validate_ref(args),
+            Self::UpdateVault { args } => UpdateVaultArgs::validate_ref(args),
+            Self::UpdateShareMeta { args } => UpdateShareMetaArgs::validate_ref(args),
+            _ => Ok(()),
+        }
+        .map_err(|_| ReadError::InvalidValue("invalid fixed instruction field"))?;
         dst.write(value);
         Ok(())
     }
@@ -454,15 +469,15 @@ unsafe impl<C: Config> SchemaWrite<C> for VaultInstruction<'_> {
                 nonce,
                 min_shares_out,
             } => {
-                <&PodU64 as SchemaWrite<C>>::size_of(amount)?
-                    + <&PodU64 as SchemaWrite<C>>::size_of(nonce)?
-                    + <&PodU64 as SchemaWrite<C>>::size_of(min_shares_out)?
+                <&U64 as SchemaWrite<C>>::size_of(amount)?
+                    + <&U64 as SchemaWrite<C>>::size_of(nonce)?
+                    + <&U64 as SchemaWrite<C>>::size_of(min_shares_out)?
             }
             Self::ProtocolCPI { data } => <&[u8] as SchemaWrite<C>>::size_of(data)?,
             Self::RefreshPrices { reports } => <&[u8] as SchemaWrite<C>>::size_of(reports)?,
             Self::SetPausedTransfers { paused } => <&u8 as SchemaWrite<C>>::size_of(paused)?,
             Self::GrantRevokeDelegate { permissions } => {
-                <&PodU64 as SchemaWrite<C>>::size_of(permissions)?
+                <&U64 as SchemaWrite<C>>::size_of(permissions)?
             }
             Self::Redeem {
                 shares,
@@ -470,9 +485,9 @@ unsafe impl<C: Config> SchemaWrite<C> for VaultInstruction<'_> {
                 min_out,
                 payout_mint,
             } => {
-                <&PodU64 as SchemaWrite<C>>::size_of(shares)?
-                    + <&PodU64 as SchemaWrite<C>>::size_of(nonce)?
-                    + <&PodU64 as SchemaWrite<C>>::size_of(min_out)?
+                <&U64 as SchemaWrite<C>>::size_of(shares)?
+                    + <&U64 as SchemaWrite<C>>::size_of(nonce)?
+                    + <&U64 as SchemaWrite<C>>::size_of(min_out)?
                     + <&Address as SchemaWrite<C>>::size_of(payout_mint)?
             }
             Self::PriceOpaque { args } => <&PriceOpaqueArgs as SchemaWrite<C>>::size_of(args)?,
@@ -480,16 +495,16 @@ unsafe impl<C: Config> SchemaWrite<C> for VaultInstruction<'_> {
                 amount,
                 min_shares_out,
             } => {
-                <&PodU64 as SchemaWrite<C>>::size_of(amount)?
-                    + <&PodU64 as SchemaWrite<C>>::size_of(min_shares_out)?
+                <&U64 as SchemaWrite<C>>::size_of(amount)?
+                    + <&U64 as SchemaWrite<C>>::size_of(min_shares_out)?
             }
             Self::RedeemDirect { shares, min_out } => {
-                <&PodU64 as SchemaWrite<C>>::size_of(shares)?
-                    + <&PodU64 as SchemaWrite<C>>::size_of(min_out)?
+                <&U64 as SchemaWrite<C>>::size_of(shares)?
+                    + <&U64 as SchemaWrite<C>>::size_of(min_out)?
             }
             Self::SetPaused { flags } => <&u8 as SchemaWrite<C>>::size_of(flags)?,
             Self::FlashDeposit { amount } | Self::FlashWithdraw { amount } => {
-                <&PodU64 as SchemaWrite<C>>::size_of(amount)?
+                <&U64 as SchemaWrite<C>>::size_of(amount)?
             }
             Self::UpdateShareMeta { args } => {
                 <&UpdateShareMetaArgs as SchemaWrite<C>>::size_of(args)?
@@ -518,9 +533,9 @@ unsafe impl<C: Config> SchemaWrite<C> for VaultInstruction<'_> {
                 nonce,
                 min_shares_out,
             } => {
-                <&PodU64 as SchemaWrite<C>>::write(writer.by_ref(), amount)?;
-                <&PodU64 as SchemaWrite<C>>::write(writer.by_ref(), nonce)?;
-                <&PodU64 as SchemaWrite<C>>::write(writer.by_ref(), min_shares_out)?;
+                <&U64 as SchemaWrite<C>>::write(writer.by_ref(), amount)?;
+                <&U64 as SchemaWrite<C>>::write(writer.by_ref(), nonce)?;
+                <&U64 as SchemaWrite<C>>::write(writer.by_ref(), min_shares_out)?;
             }
             Self::ProtocolCPI { data } => {
                 <&[u8] as SchemaWrite<C>>::write(writer.by_ref(), data)?;
@@ -532,7 +547,7 @@ unsafe impl<C: Config> SchemaWrite<C> for VaultInstruction<'_> {
                 <&u8 as SchemaWrite<C>>::write(writer.by_ref(), paused)?;
             }
             Self::GrantRevokeDelegate { permissions } => {
-                <&PodU64 as SchemaWrite<C>>::write(writer.by_ref(), permissions)?;
+                <&U64 as SchemaWrite<C>>::write(writer.by_ref(), permissions)?;
             }
             Self::Redeem {
                 shares,
@@ -540,9 +555,9 @@ unsafe impl<C: Config> SchemaWrite<C> for VaultInstruction<'_> {
                 min_out,
                 payout_mint,
             } => {
-                <&PodU64 as SchemaWrite<C>>::write(writer.by_ref(), shares)?;
-                <&PodU64 as SchemaWrite<C>>::write(writer.by_ref(), nonce)?;
-                <&PodU64 as SchemaWrite<C>>::write(writer.by_ref(), min_out)?;
+                <&U64 as SchemaWrite<C>>::write(writer.by_ref(), shares)?;
+                <&U64 as SchemaWrite<C>>::write(writer.by_ref(), nonce)?;
+                <&U64 as SchemaWrite<C>>::write(writer.by_ref(), min_out)?;
                 <&Address as SchemaWrite<C>>::write(writer.by_ref(), payout_mint)?;
             }
             Self::PriceOpaque { args } => {
@@ -552,18 +567,18 @@ unsafe impl<C: Config> SchemaWrite<C> for VaultInstruction<'_> {
                 amount,
                 min_shares_out,
             } => {
-                <&PodU64 as SchemaWrite<C>>::write(writer.by_ref(), amount)?;
-                <&PodU64 as SchemaWrite<C>>::write(writer.by_ref(), min_shares_out)?;
+                <&U64 as SchemaWrite<C>>::write(writer.by_ref(), amount)?;
+                <&U64 as SchemaWrite<C>>::write(writer.by_ref(), min_shares_out)?;
             }
             Self::RedeemDirect { shares, min_out } => {
-                <&PodU64 as SchemaWrite<C>>::write(writer.by_ref(), shares)?;
-                <&PodU64 as SchemaWrite<C>>::write(writer.by_ref(), min_out)?;
+                <&U64 as SchemaWrite<C>>::write(writer.by_ref(), shares)?;
+                <&U64 as SchemaWrite<C>>::write(writer.by_ref(), min_out)?;
             }
             Self::SetPaused { flags } => {
                 <&u8 as SchemaWrite<C>>::write(writer.by_ref(), flags)?;
             }
             Self::FlashDeposit { amount } | Self::FlashWithdraw { amount } => {
-                <&PodU64 as SchemaWrite<C>>::write(writer.by_ref(), amount)?;
+                <&U64 as SchemaWrite<C>>::write(writer.by_ref(), amount)?;
             }
             Self::UpdateShareMeta { args } => {
                 <&UpdateShareMetaArgs as SchemaWrite<C>>::write(writer.by_ref(), args)?;

@@ -66,7 +66,7 @@ impl<T: ZeroCopy> Event<T> {
 mod tests {
     use {
         super::*,
-        zeropod::pod::{PodI64, PodU64},
+        zeropod::{I64, U64},
     };
 
     #[test]
@@ -79,13 +79,13 @@ mod tests {
             VaultEvent::FeeAccrued,
             FeeAccrued {
                 vault,
-                curator_management: PodU64::from(1u64),
-                protocol_management: PodU64::from(2u64),
-                curator_performance: PodU64::from(3u64),
-                protocol_performance: PodU64::from(4u64),
-                curator_shares: PodU64::from(5u64),
-                protocol_shares: PodU64::from(6u64),
-                timestamp: PodI64::from(7i64),
+                curator_management: U64::from(1u64),
+                protocol_management: U64::from(2u64),
+                curator_performance: U64::from(3u64),
+                protocol_performance: U64::from(4u64),
+                curator_shares: U64::from(5u64),
+                protocol_shares: U64::from(6u64),
+                timestamp: I64::from(7i64),
             },
         );
         // SAFETY: Event<T> is asserted zero-copy and align-1 above; view its

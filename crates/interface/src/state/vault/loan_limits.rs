@@ -1,9 +1,11 @@
 use {
+    crate::encoding,
     codama_macros::CodamaType,
+    encoding::{ZcElem, ZcValidate, ZeroPodError},
     solana_address::Address,
     solana_program_error::ProgramError,
     wincode::{SchemaRead, SchemaWrite},
-    zeropod::{ZcElem, ZcValidate, error::ZeroPodError, pod::PodU32},
+    zeropod::U32,
 };
 
 /// Curator-approved terms for new loans on either side. The all-zero value
@@ -18,14 +20,14 @@ pub struct LoanLimits {
     /// deducted from proceeds. As lender a minimum. Zero disables new loans: it
     /// would be no floor at all on the lending side.
     #[codama(type = number(u32))]
-    pub max_apy_bps: PodU32,
+    pub max_apy_bps: U32,
     #[codama(type = number(u32))]
-    pub min_duration_seconds: PodU32,
+    pub min_duration_seconds: U32,
     #[codama(type = number(u32))]
-    pub max_duration_seconds: PodU32,
+    pub max_duration_seconds: U32,
     /// Maximum lifetime of a new standing (principal) offer.
     #[codama(type = number(u32))]
-    pub max_offer_expiry_seconds: PodU32,
+    pub max_offer_expiry_seconds: U32,
     /// Zero permits any lender. Adapters must reject operations that cannot
     /// enforce a nonzero lender.
     pub lender: Address,
@@ -44,26 +46,26 @@ unsafe impl ZcElem for LoanLimits {}
 impl LoanLimits {
     pub const fn zero() -> Self {
         Self {
-            max_apy_bps: PodU32::ZERO,
-            min_duration_seconds: PodU32::ZERO,
-            max_duration_seconds: PodU32::ZERO,
-            max_offer_expiry_seconds: PodU32::ZERO,
+            max_apy_bps: U32::ZERO,
+            min_duration_seconds: U32::ZERO,
+            max_duration_seconds: U32::ZERO,
+            max_offer_expiry_seconds: U32::ZERO,
             lender: Address::new_from_array([0; 32]),
         }
     }
 
     #[inline]
     pub fn enabled(&self) -> bool {
-        !self.max_apy_bps.is_zero()
+        self.max_apy_bps.get() != 0
     }
 
     pub fn validate(&self) -> Result<(), ProgramError> {
         if !self.enabled() {
             return Ok(());
         }
-        if self.min_duration_seconds.is_zero()
+        if self.min_duration_seconds.get() == 0
             || self.min_duration_seconds.get() > self.max_duration_seconds.get()
-            || self.max_offer_expiry_seconds.is_zero()
+            || self.max_offer_expiry_seconds.get() == 0
         {
             return Err(ProgramError::InvalidArgument);
         }

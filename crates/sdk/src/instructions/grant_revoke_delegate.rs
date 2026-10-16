@@ -1,6 +1,6 @@
 use {
     crate::{instructions::SYSTEM_PROGRAM_ID, pda::derive_protocol_delegate},
-    earn_vaults_interface::{VaultInstruction, zeropod::pod::PodU64},
+    earn_vaults_interface::{VaultInstruction, zeropod::U64},
     solana_address::Address,
     solana_instruction::{AccountMeta, Instruction},
 };
@@ -35,7 +35,7 @@ impl GrantRevokeDelegate {
     pub fn into_instruction(self) -> Instruction {
         let delegate_pda = derive_protocol_delegate(&self.vault, &self.delegate, &self.protocol_id);
 
-        let permissions = PodU64::from(self.permissions);
+        let permissions = U64::from(self.permissions);
         let data = super::encode(&VaultInstruction::GrantRevokeDelegate {
             permissions: &permissions,
         });

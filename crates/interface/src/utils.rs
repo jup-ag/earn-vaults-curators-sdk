@@ -6,9 +6,12 @@ macro_rules! check_account_layout {
     };
 }
 
-#[cfg(any(target_os = "solana", target_arch = "bpf"))]
-use solana_address::{PDA_MARKER, address_eq};
 use {solana_address::Address, solana_program_error::ProgramError};
+#[cfg(any(target_os = "solana", target_arch = "bpf"))]
+use {
+    solana_address::{PDA_MARKER, address_eq, syscalls::sol_curve_validate_point},
+    solana_sha256_hasher::sol_sha256,
+};
 
 /// Whether a Token-2022 account carries the `ImmutableOwner` extension.
 ///
@@ -62,12 +65,6 @@ pub const fn find_program_address_const(
 // `(*const u8, u64)`, identical to `SolBytes`, so a slice-of-slices passes
 // straight to `sol_sha256` without intermediate copies.
 // ---------------------------------------------------------------------------
-
-#[cfg(any(target_os = "solana", target_arch = "bpf"))]
-unsafe extern "C" {
-    fn sol_sha256(vals: *const u8, val_len: u64, hash_result: *mut u8) -> u64;
-    fn sol_curve_validate_point(curve_id: u64, point_addr: *const u8, result: *mut u8) -> u64;
-}
 
 /// Max slice entries we pass to `sol_sha256`: 16 seeds + bump + program_id +
 /// PDA_MARKER on the find path, or 17 bump-inclusive seeds + program_id +

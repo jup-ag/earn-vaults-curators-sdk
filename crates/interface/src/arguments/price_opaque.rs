@@ -1,7 +1,7 @@
 use {
     codama_macros::CodamaType,
     wincode::{SchemaRead, SchemaWrite},
-    zeropod::pod::PodU64,
+    zeropod::U64,
 };
 
 /// `slot_idx` bit that re-targets the write from a position slot to a hand-priced
@@ -23,5 +23,5 @@ pub const TARGET_INDEX_MASK: u8 = !(ASSET_TARGET | SINK_TARGET);
 pub struct PriceOpaqueArgs {
     pub slot_idx: u8,
     #[codama(type = number(u64))]
-    pub value: PodU64,
+    pub value: U64,
 }

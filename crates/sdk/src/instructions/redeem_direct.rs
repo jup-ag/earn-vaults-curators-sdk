@@ -3,7 +3,7 @@ use {
         instructions::TOKEN_2022_PROGRAM_ID,
         pda::{derive_share_mint, derive_vault_authority},
     },
-    earn_vaults_interface::{VaultInstruction, constants::EVENT_PDA, zeropod::pod::PodU64},
+    earn_vaults_interface::{VaultInstruction, constants::EVENT_PDA, zeropod::U64},
     solana_address::Address,
     solana_instruction::{AccountMeta, Instruction},
 };
@@ -39,8 +39,8 @@ impl RedeemDirect {
         let share_mint = derive_share_mint(&self.vault);
         let vault_authority = derive_vault_authority(&self.vault);
 
-        let shares = PodU64::from(self.shares);
-        let min_out = PodU64::from(self.min_out);
+        let shares = U64::from(self.shares);
+        let min_out = U64::from(self.min_out);
         let data = super::encode(&VaultInstruction::RedeemDirect {
             shares: &shares,
             min_out: &min_out,

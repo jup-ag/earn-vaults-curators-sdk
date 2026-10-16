@@ -3,13 +3,15 @@ use {
     codama_macros::CodamaType,
     solana_address::Address,
     wincode::{SchemaRead, SchemaWrite},
-    zeropod::pod::{PodI32, PodI64, PodU16, PodU32, PodU64},
+    zeropod::{I32, I64, U16, U32, U64},
 };
 
 pub const ASSET_FLAG_DEPOSIT_ENABLED: u8 = 1 << 0;
 pub const ASSET_FLAG_PRICE_IN_AUM: u8 = 1 << 1;
 pub const ASSET_FLAG_CHAINLINK: u8 = 1 << 2;
 pub const ASSET_FLAG_MANUAL_PRICE: u8 = 1 << 3;
+/// Validation-owned: this priced row had no custody balance in the AUM snapshot.
+pub const ASSET_FLAG_ZERO_AT_PRICING: u8 = 1 << 4;
 pub const ASSET_FLAG_CURATOR_MASK: u8 = ASSET_FLAG_CHAINLINK;
 pub const ASSET_FLAG_UPDATE_MASK: u8 = ASSET_FLAG_CHAINLINK | ASSET_FLAG_DEPOSIT_ENABLED;
 
@@ -25,7 +27,7 @@ pub struct AssetConfig {
     /// Maximum observation age for valuation and settlement, for every source.
     /// Zero selects the 15s default; positive values apply without a ceiling.
     #[codama(type = number(u32))]
-    pub max_staleness_seconds: PodU32,
+    pub max_staleness_seconds: U32,
     /// The decimal scale this row's price source quotes its raw mantissa at,
     /// capped at `MAX_ORACLE_REPORT_DECIMALS`. `0` means the source states its
     /// own exponent or its documented default applies.
@@ -40,21 +42,21 @@ pub struct AssetConfig {
     /// re-pricing it.
     pub report_decimals: u8,
     #[codama(type = number(u16))]
-    pub max_confidence_bps: PodU16,
+    pub max_confidence_bps: U16,
     #[codama(type = number(u64))]
-    pub deployed: PodU64,
+    pub deployed: U64,
     #[codama(type = number(u64))]
-    pub max_deployed: PodU64,
+    pub max_deployed: U64,
     #[codama(type = number(u64))]
-    pub max_deposit: PodU64,
+    pub max_deposit: U64,
     #[codama(type = number(i64))]
-    pub last_price: PodI64,
+    pub last_price: I64,
     #[codama(type = number(u64))]
-    pub last_conf: PodU64,
+    pub last_conf: U64,
     #[codama(type = number(i32))]
-    pub last_price_expo: PodI32,
+    pub last_price_expo: I32,
     #[codama(type = number(i64))]
-    pub last_publish_time: PodI64,
+    pub last_publish_time: I64,
     /// Quote leg of a composed price: the row's price is `oracle` × this feed
     /// (sUSDai/USD = sUSDai/USDai × USDai/USD), and the `last_*` reading above
     /// is the composed one. Zero = a single-feed row.
@@ -64,13 +66,13 @@ pub struct AssetConfig {
     /// Publish time of each leg last composed: the per-feed replay guard.
     /// `last_publish_time` is the older of the two.
     #[codama(type = number(i64))]
-    pub base_publish_time: PodI64,
+    pub base_publish_time: I64,
     #[codama(type = number(i64))]
-    pub quote_publish_time: PodI64,
+    pub quote_publish_time: I64,
     /// Maximum seconds an observation may lead the on-chain clock, for every source.
     /// Zero rejects any future timestamp; positive values apply exactly.
     #[codama(type = number(u32))]
-    pub max_future_skew_seconds: PodU32,
+    pub max_future_skew_seconds: U32,
 }
 
 impl AssetConfig {
@@ -82,23 +84,23 @@ impl AssetConfig {
             flags: 0,
             decimals: 0,
             ata_bump: 255,
-            max_staleness_seconds: PodU32::new_from_array(
+            max_staleness_seconds: U32::from_bytes(
                 (DEFAULT_ASSET_STALENESS_SECONDS as u32).to_le_bytes(),
             ),
             report_decimals: 0,
-            max_confidence_bps: PodU16::ZERO,
-            deployed: PodU64::ZERO,
-            max_deployed: PodU64::ZERO,
-            max_deposit: PodU64::ZERO,
-            last_price: PodI64::ZERO,
-            last_conf: PodU64::ZERO,
-            last_price_expo: PodI32::ZERO,
-            last_publish_time: PodI64::ZERO,
+            max_confidence_bps: U16::ZERO,
+            deployed: U64::ZERO,
+            max_deployed: U64::ZERO,
+            max_deposit: U64::ZERO,
+            last_price: I64::ZERO,
+            last_conf: U64::ZERO,
+            last_price_expo: I32::ZERO,
+            last_publish_time: I64::ZERO,
             quote_oracle: Address::new_from_array([0; 32]),
             quote_report_decimals: 0,
-            base_publish_time: PodI64::ZERO,
-            quote_publish_time: PodI64::ZERO,
-            max_future_skew_seconds: PodU32::new_from_array(
+            base_publish_time: I64::ZERO,
+            quote_publish_time: I64::ZERO,
+            max_future_skew_seconds: U32::from_bytes(
                 (DEFAULT_ASSET_STALENESS_SECONDS as u32).to_le_bytes(),
             ),
         }
@@ -127,6 +129,11 @@ impl AssetConfig {
     #[inline]
     pub const fn price_in_aum(&self) -> bool {
         self.flags & ASSET_FLAG_PRICE_IN_AUM != 0
+    }
+
+    #[inline]
+    pub const fn zero_at_pricing(&self) -> bool {
+        self.flags & ASSET_FLAG_ZERO_AT_PRICING != 0
     }
 
     /// `true` when `oracle` is a Chainlink Data Streams feed id — refreshed by

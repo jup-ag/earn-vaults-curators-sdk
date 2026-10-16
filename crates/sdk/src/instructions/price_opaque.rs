@@ -1,7 +1,7 @@
 use {
     crate::pda::derive_protocol_delegate,
     earn_vaults_interface::{
-        VaultInstruction, arguments::PriceOpaqueArgs, constants::EVENT_PDA, zeropod::pod::PodU64,
+        VaultInstruction, arguments::PriceOpaqueArgs, constants::EVENT_PDA, zeropod::U64,
     },
     solana_address::Address,
     solana_instruction::{AccountMeta, Instruction},
@@ -40,7 +40,7 @@ impl PriceOpaque {
 
         let args = PriceOpaqueArgs {
             slot_idx: self.slot,
-            value: PodU64::from(self.value),
+            value: U64::from(self.value),
         };
         let data = super::encode(&VaultInstruction::PriceOpaque { args: &args });
 

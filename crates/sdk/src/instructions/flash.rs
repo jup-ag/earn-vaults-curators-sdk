@@ -2,7 +2,7 @@ use {
     crate::pda::{
         derive_associated_token_account, derive_protocol_delegate, derive_vault_authority,
     },
-    earn_vaults_interface::{VaultInstruction, constants::EVENT_PDA, zeropod::pod::PodU64},
+    earn_vaults_interface::{VaultInstruction, constants::EVENT_PDA, zeropod::U64},
     solana_address::Address,
     solana_instruction::{AccountMeta, Instruction},
 };
@@ -75,7 +75,7 @@ fn common_metas(
 
 impl FlashDeposit {
     pub fn into_instruction(self) -> Instruction {
-        let amount = PodU64::from(self.amount);
+        let amount = U64::from(self.amount);
         let data = super::encode(&VaultInstruction::FlashDeposit { amount: &amount });
 
         let mut accounts = common_metas(
@@ -100,7 +100,7 @@ impl FlashDeposit {
 
 impl FlashWithdraw {
     pub fn into_instruction(self) -> Instruction {
-        let amount = PodU64::from(self.amount);
+        let amount = U64::from(self.amount);
         let data = super::encode(&VaultInstruction::FlashWithdraw { amount: &amount });
 
         let mut accounts = common_metas(

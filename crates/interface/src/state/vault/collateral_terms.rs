@@ -1,9 +1,10 @@
 use {
+    crate::encoding::{ZcElem, ZcValidate, ZeroPodError},
     codama_macros::CodamaType,
     solana_address::Address,
     solana_program_error::ProgramError,
     wincode::{SchemaRead, SchemaWrite},
-    zeropod::{ZcElem, ZcValidate, error::ZeroPodError, pod::PodU64},
+    zeropod::U64,
 };
 
 /// Policy key of Offerbook's general collateral approval: [`CollateralTerms`]
@@ -27,17 +28,17 @@ pub struct CollateralTerms {
     pub principal_mint: Address,
     /// Maximum gross principal in the mint's raw token units, per offer.
     #[codama(type = number(u64))]
-    pub max_principal_amount: PodU64,
+    pub max_principal_amount: U64,
     /// Maximum raw collateral tokens pledged or promised in one loan.
     #[codama(type = number(u64))]
-    pub max_collateral_amount: PodU64,
+    pub max_collateral_amount: U64,
 }
 
 impl CollateralTerms {
     pub fn validate(&self) -> Result<(), ProgramError> {
         if self.principal_mint == Address::default()
-            || self.max_principal_amount.is_zero()
-            || self.max_collateral_amount.is_zero()
+            || self.max_principal_amount.get() == 0
+            || self.max_collateral_amount.get() == 0
         {
             return Err(ProgramError::InvalidArgument);
         }

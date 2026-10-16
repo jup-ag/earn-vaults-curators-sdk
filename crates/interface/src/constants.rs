@@ -1,7 +1,7 @@
 use {
     crate::utils::find_program_address_const,
     solana_address::Address,
-    zeropod::pod::{PodI64, PodU64},
+    zeropod::{I64, U64},
 };
 
 pub const SEED_EVENT_AUTHORITY: &[u8] = b"__event_authority";
@@ -44,7 +44,7 @@ pub const PROTOCOL_TREASURY: Address =
 /// Default freshness window for validated AUM, position marks and sink marks.
 /// Their respective curator-set windows override this default independently.
 const MAX_STALENESS: i64 = 60;
-pub const MAX_STALENESS_SECONDS: PodI64 = PodI64::new_from_array(MAX_STALENESS.to_le_bytes());
+pub const MAX_STALENESS_SECONDS: I64 = I64::from_bytes(MAX_STALENESS.to_le_bytes());
 
 /// Ceiling on curator-set position and sink staleness overrides.
 /// Asset oracle windows accept the full `u32` range independently.
@@ -61,6 +61,14 @@ pub const CHAINLINK_OCR2_STORE_ID: Address =
 /// tells it apart from a configured cap. Staleness has no such sentinel: its
 /// waiver is [`MAX_PARAM_STALENESS_SECONDS`] itself, the ceiling being the point.
 pub const UNBOUNDED_BPS: u16 = u16::MAX;
+
+/// Whether a stored position drift or sink bootstrap cap is waived.
+/// `window_bps` maps `Some(0)` to this sentinel at vault initialization and
+/// when adding a position; updates to existing fields accept it directly.
+#[inline]
+pub const fn is_waived_bps(stored: u16) -> bool {
+    stored == UNBOUNDED_BPS
+}
 
 /// Freshness window an asset row falls back to when its `max_staleness_seconds`
 /// is `0` — the age a cached reading may reach at `validate_aum` and, because
@@ -98,11 +106,25 @@ pub const MAX_LIQ_SLIPPAGE_PER_WINDOW_BPS: u128 = 1_000;
 /// elapsed time (`elapsed == 0` → no budget) against the smaller of the prior
 /// mark and last validated net AUM — blocks walking a mark for stale-NAV arb.
 pub const MAX_DRIFT_BPS: u64 = 200; // 2% per staleness window
-pub const MAX_TIMELOCK_DELAY: PodU64 = PodU64::new_from_array((30u64 * 24 * 60 * 60).to_le_bytes());
+
+/// The drift budget a stored bps window resolves to: `0` is the global default
+/// ([`MAX_DRIFT_BPS`]), the waiver sentinel is `None` — no budget to enforce at
+/// all — and anything else is itself.
+#[inline]
+pub const fn drift_budget(stored: u16) -> Option<u64> {
+    if stored == 0 {
+        Some(MAX_DRIFT_BPS)
+    } else if is_waived_bps(stored) {
+        None
+    } else {
+        Some(stored as u64)
+    }
+}
+pub const MAX_TIMELOCK_DELAY: U64 = U64::from_bytes((30u64 * 24 * 60 * 60).to_le_bytes());
 
 /// `Vault.timelock_delay` when the curator passes `0` at init: a non-zero
 /// Redeem → ClaimRedeem cool-down is the baseline posture (recall time). 1 day.
-pub const DEFAULT_TIMELOCK_DELAY: PodU64 = PodU64::new_from_array((24_u64 * 60 * 60).to_le_bytes());
+pub const DEFAULT_TIMELOCK_DELAY: U64 = U64::from_bytes((24_u64 * 60 * 60).to_le_bytes());
 
 pub const MAX_INSTANT_REDEEM_FEE_BPS: u16 = 1_000;
 pub const MIN_INSTANT_REDEEM_FEE_BPS: u16 = 50;

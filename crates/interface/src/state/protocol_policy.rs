@@ -1,11 +1,11 @@
 use {
-    crate::{ID, check_account_layout, errors::VaultError, state::Protocol},
+    crate::{ID, check_account_layout, encoding, errors::VaultError, state::Protocol},
     codama_macros::CodamaAccount,
+    encoding::ZcElem,
     solana_account_view::AccountView,
     solana_address::{Address, address_eq},
     solana_program_error::ProgramError,
     wincode::{SchemaRead, SchemaWrite, ZeroCopy},
-    zeropod::ZcElem,
 };
 
 /// `["protocol_policy", vault, protocol, key]`: one curator policy for a routed

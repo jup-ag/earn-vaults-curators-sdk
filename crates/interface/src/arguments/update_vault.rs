@@ -1,12 +1,10 @@
 use {
+    crate::encoding,
     codama_macros::CodamaType,
+    encoding::{PodOption, ZcElem, ZcValidate, ZeroPodError},
     solana_address::Address,
     wincode::{SchemaRead, SchemaWrite},
-    zeropod::{
-        ZcElem, ZcValidate,
-        error::ZeroPodError,
-        pod::{PodI64, PodOption, PodU16, PodU32, PodU64},
-    },
+    zeropod::{I64, U16, U32, U64},
 };
 
 #[derive(SchemaRead, SchemaWrite, CodamaType, Clone, Copy)]
@@ -36,13 +34,13 @@ pub struct AssetUpdate {
     /// Maximum observation age for valuation and settlement, 0..=u32::MAX.
     /// Zero selects the 15s default. The i64 wire encoding is unchanged.
     #[codama(type = option(number(i64, le), fixed))]
-    pub max_staleness_seconds: PodOption<PodI64>,
+    pub max_staleness_seconds: PodOption<I64>,
     /// Confidence cap in bps of price; `0` means the global default.
     #[codama(type = option(number(u16, le), fixed))]
-    pub max_confidence_bps: PodOption<PodU16>,
+    pub max_confidence_bps: PodOption<U16>,
     /// Per-asset strategy-outflow ceiling; `0` = unlimited.
     #[codama(type = option(number(u64, le), fixed))]
-    pub max_deployed: PodOption<PodU64>,
+    pub max_deployed: PodOption<U64>,
     /// Restate the remaining `deployed` charge across all protocols in raw token
     /// units after verifying a principal return. CCIP OffRamp deliveries and
     /// Offerbook escrow withdrawals leave this counter unchanged. Preserve
@@ -50,10 +48,10 @@ pub struct AssetUpdate {
     /// Listed Offerbook withdrawals already fold the position mark: do not reset
     /// it; reconcile and re-attest the remaining value with `PriceOpaque`.
     #[codama(type = option(number(u64, le), fixed))]
-    pub deployed: PodOption<PodU64>,
+    pub deployed: PodOption<U64>,
     /// Per-asset deposit capacity ceiling; `0` = unlimited.
     #[codama(type = option(number(u64, le), fixed))]
-    pub max_deposit: PodOption<PodU64>,
+    pub max_deposit: PodOption<U64>,
     /// Toggle deposits for this asset (`1` enable / `0` disable). Its own
     /// field, not a `flags` bit, so a provider switch can't silently rewrite
     /// the deposit gate. A hand-priced row may not be deposit-enabled. Among
@@ -100,10 +98,10 @@ pub struct PositionUpdate {
     pub index: u8,
     /// Per-position staleness override; `0` means the global default.
     #[codama(type = option(number(u64, le), fixed))]
-    pub max_staleness_seconds: PodOption<PodU64>,
+    pub max_staleness_seconds: PodOption<U64>,
     /// Per-position drift override; `0` means the global default.
     #[codama(type = option(number(u16, le), fixed))]
-    pub max_drift_bps: PodOption<PodU16>,
+    pub max_drift_bps: PodOption<U16>,
     /// `Some(1)` resets a non-DEBT row to never-priced (clears `PRICED` /
     /// `INITIALIZED`, zeroes the mark), so the next `price_opaque` bootstraps
     /// again against the last validated AUM. The unbrick path for an asset-like
@@ -143,10 +141,10 @@ pub struct AssetAdd {
     pub report_decimals: u8,
     /// Strategy-outflow ceiling; `0` = unlimited.
     #[codama(type = number(u64))]
-    pub max_deployed: PodU64,
+    pub max_deployed: U64,
     /// Deposit capacity ceiling; `0` = unlimited.
     #[codama(type = number(u64))]
-    pub max_deposit: PodU64,
+    pub max_deposit: U64,
 }
 
 impl ZcValidate for AssetAdd {
@@ -178,11 +176,11 @@ pub struct PositionAdd {
     ///
     /// [`PositionInit::max_staleness_seconds`]: crate::arguments::PositionInit::max_staleness_seconds
     #[codama(type = option(number(u32, le), fixed))]
-    pub max_staleness_seconds: PodOption<PodU32>,
+    pub max_staleness_seconds: PodOption<U32>,
     /// Drift budget for the new slot — `None` = the global default, `Some(0)`
     /// waives it, `Some(n)` = `n` bps.
     #[codama(type = option(number(u16, le), fixed))]
-    pub max_drift_bps: PodOption<PodU16>,
+    pub max_drift_bps: PodOption<U16>,
 }
 
 impl ZcValidate for PositionAdd {
@@ -202,19 +200,19 @@ pub struct UpdateVaultArgs {
     #[codama(type = option(number(u8), fixed))]
     pub paused: PodOption<u8>,
     #[codama(type = option(number(u64, le), fixed))]
-    pub timelock_delay: PodOption<PodU64>,
+    pub timelock_delay: PodOption<U64>,
     #[codama(type = option(public_key, fixed))]
     pub pending_curator: PodOption<Address>,
     /// Annual curator management fee; the global protocol rate is additive.
     #[codama(type = option(number(u16, le), fixed))]
-    pub management_fee_bps: PodOption<PodU16>,
+    pub management_fee_bps: PodOption<U16>,
     /// Curator HWM performance fee in bps, capped at
     /// `MAX_PERFORMANCE_FEE_BPS`; same crystallize-first gate as
     /// `management_fee_bps`. The global protocol rate is additive.
     #[codama(type = option(number(u16, le), fixed))]
-    pub performance_fee_bps: PodOption<PodU16>,
+    pub performance_fee_bps: PodOption<U16>,
     #[codama(type = option(number(u16, le), fixed))]
-    pub instant_redeem_fee_bps: PodOption<PodU16>,
+    pub instant_redeem_fee_bps: PodOption<U16>,
     /// Asset row (`Vault.assets` index) plus the fields to apply to it.
     #[codama(type = option(link("assetUpdate"), fixed))]
     pub asset: PodOption<AssetUpdate>,
@@ -225,18 +223,18 @@ pub struct UpdateVaultArgs {
     /// Ceiling on the transient flash liability, in numéraire micro-units.
     /// `Some(0)` disables the path outright.
     #[codama(type = option(number(u64, le), fixed))]
-    pub max_flash_liability: PodOption<PodU64>,
+    pub max_flash_liability: PodOption<U64>,
     /// Discount `validate_aum` applies to every sink mark.
     #[codama(type = option(number(u16, le), fixed))]
-    pub sink_haircut_bps: PodOption<PodU16>,
+    pub sink_haircut_bps: PodOption<U16>,
     /// Freshness window every sink mark is held to; `0` = the global default.
     #[codama(type = option(number(u64, le), fixed))]
-    pub sink_max_staleness_seconds: PodOption<PodU64>,
+    pub sink_max_staleness_seconds: PodOption<U64>,
     /// Vault-wide ceiling on aggregate first sink marks, in bps of validated
     /// AUM; `0` = the global default. Not the walk rate — later marks are held
     /// to `MAX_DRIFT_BPS` per window.
     #[codama(type = option(number(u16, le), fixed))]
-    pub sink_bootstrap_cap_bps: PodOption<PodU16>,
+    pub sink_bootstrap_cap_bps: PodOption<U16>,
     /// How many sink slots may be claimed, up to `MAX_SINKS`. `Some(0)` stops
     /// new claims; slots already occupied keep their marks.
     #[codama(type = option(number(u8), fixed))]
@@ -278,8 +276,35 @@ pub struct UpdateVaultArgs {
     /// every positive u32 value applies independently of the age limit.
     /// Appended so the pre-upgrade UpdateVault encoding remains a prefix.
     #[codama(type = option(number(u32, le), fixed))]
-    pub asset_max_future_skew_seconds: PodOption<PodU32>,
+    pub asset_max_future_skew_seconds: PodOption<U32>,
     /// Validated AUM age limit; zero selects 60s, positive u32 values apply exactly.
     #[codama(type = option(number(u32, le), fixed))]
-    pub max_aum_staleness_seconds: PodOption<PodU32>,
+    pub max_aum_staleness_seconds: PodOption<U32>,
+}
+
+impl ZcValidate for UpdateVaultArgs {
+    fn validate_ref(value: &Self) -> Result<(), zeropod::Error> {
+        ZcValidate::validate_ref(&value.paused)?;
+        ZcValidate::validate_ref(&value.timelock_delay)?;
+        ZcValidate::validate_ref(&value.pending_curator)?;
+        ZcValidate::validate_ref(&value.management_fee_bps)?;
+        ZcValidate::validate_ref(&value.performance_fee_bps)?;
+        ZcValidate::validate_ref(&value.instant_redeem_fee_bps)?;
+        ZcValidate::validate_ref(&value.asset)?;
+        ZcValidate::validate_ref(&value.position)?;
+        ZcValidate::validate_ref(&value.max_flash_liability)?;
+        ZcValidate::validate_ref(&value.sink_haircut_bps)?;
+        ZcValidate::validate_ref(&value.sink_max_staleness_seconds)?;
+        ZcValidate::validate_ref(&value.sink_bootstrap_cap_bps)?;
+        ZcValidate::validate_ref(&value.sink_capacity)?;
+        ZcValidate::validate_ref(&value.sink_release)?;
+        ZcValidate::validate_ref(&value.add_asset)?;
+        ZcValidate::validate_ref(&value.add_position)?;
+        ZcValidate::validate_ref(&value.remove_asset)?;
+        ZcValidate::validate_ref(&value.remove_position)?;
+        ZcValidate::validate_ref(&value.retire_debt)?;
+        ZcValidate::validate_ref(&value.asset_max_future_skew_seconds)?;
+        ZcValidate::validate_ref(&value.max_aum_staleness_seconds)?;
+        Ok(())
+    }
 }

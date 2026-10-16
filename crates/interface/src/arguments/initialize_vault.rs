@@ -1,8 +1,10 @@
 use {
+    crate::encoding,
     codama_macros::CodamaType,
+    encoding::{PodOption, PodString, ZcValidate},
     solana_address::Address,
     wincode::{SchemaRead, SchemaWrite},
-    zeropod::pod::{PodI64, PodOption, PodString, PodU16, PodU32, PodU64},
+    zeropod::{I64, U16, U32, U64},
 };
 
 /// One opaque position, laid out at its own slot in
@@ -25,7 +27,7 @@ pub struct PositionInit {
     /// [`MAX_STALENESS_SECONDS`]: crate::constants::MAX_STALENESS_SECONDS
     /// [`MAX_PARAM_STALENESS_SECONDS`]: crate::constants::MAX_PARAM_STALENESS_SECONDS
     #[codama(type = option(number(u32, le), fixed))]
-    pub max_staleness_seconds: PodOption<PodU32>,
+    pub max_staleness_seconds: PodOption<U32>,
     /// Drift budget per window for this slot's mark. `None` = the global
     /// default ([`MAX_DRIFT_BPS`]), `Some(0)` waives the budget — any mark a
     /// PRICE delegate posts is then accepted, bootstrap included — and
@@ -33,7 +35,7 @@ pub struct PositionInit {
     ///
     /// [`MAX_DRIFT_BPS`]: crate::constants::MAX_DRIFT_BPS
     #[codama(type = option(number(u16, le), fixed))]
-    pub max_drift_bps: PodOption<PodU16>,
+    pub max_drift_bps: PodOption<U16>,
 }
 
 #[derive(SchemaRead, SchemaWrite, Clone, Copy, CodamaType)]
@@ -54,9 +56,9 @@ pub struct AssetInit {
     /// [`AssetConfig::report_decimals`]: crate::state::AssetConfig::report_decimals
     pub report_decimals: u8,
     #[codama(type = number(u64))]
-    pub max_deployed: PodU64,
+    pub max_deployed: U64,
     #[codama(type = number(u64))]
-    pub max_deposit: PodU64,
+    pub max_deposit: U64,
 }
 
 #[derive(SchemaRead, SchemaWrite, CodamaType)]
@@ -71,7 +73,7 @@ pub struct InitializeVaultArgs {
     // Literal: codama cannot resolve a const as a fixed-array length.
     pub positions: [PositionInit; 8],
     #[codama(type = number(i64))]
-    pub created_at: PodI64,
+    pub created_at: I64,
     /// Seconds between `Redeem` and `ClaimRedeem`. `None` = the baseline
     /// posture ([`DEFAULT_TIMELOCK_DELAY`], 1 day), `Some(0)` = no cool-down at
     /// all, `Some(n)` = `n` seconds, capped at [`MAX_TIMELOCK_DELAY`].
@@ -79,41 +81,41 @@ pub struct InitializeVaultArgs {
     /// [`DEFAULT_TIMELOCK_DELAY`]: crate::constants::DEFAULT_TIMELOCK_DELAY
     /// [`MAX_TIMELOCK_DELAY`]: crate::constants::MAX_TIMELOCK_DELAY
     #[codama(type = option(number(u64, le), fixed))]
-    pub timelock_delay: PodOption<PodU64>,
+    pub timelock_delay: PodOption<U64>,
     /// Annual curator management fee on AUM, in bps; capped at
     /// `MAX_MANAGEMENT_FEE_BPS`. The global protocol management fee is
     /// additive and is not configured per vault.
     #[codama(type = number(u16))]
-    pub management_fee_bps: PodU16,
+    pub management_fee_bps: U16,
     /// Curator HWM performance fee on NAV gains, in bps; capped at
     /// `MAX_PERFORMANCE_FEE_BPS`. `0` disables the curator component. The
     /// global protocol performance fee remains additive.
     #[codama(type = number(u16))]
-    pub performance_fee_bps: PodU16,
+    pub performance_fee_bps: U16,
     /// Exit fee on the instant (`RedeemDirect`) path. `None` leaves the path
     /// disabled; `Some(n)` enables it at `n` bps, which must sit inside
     /// `MIN_INSTANT_REDEEM_FEE_BPS..=MAX_INSTANT_REDEEM_FEE_BPS` — the floor is
     /// what keeps an instant exit from front-running a pending mark.
     #[codama(type = option(number(u16, le), fixed))]
-    pub instant_redeem_fee_bps: PodOption<PodU16>,
+    pub instant_redeem_fee_bps: PodOption<U16>,
     /// Maximum transient flash liability in numéraire micro-units. `0` leaves
     /// the path disabled.
     #[codama(type = number(u64))]
-    pub max_flash_liability: PodU64,
+    pub max_flash_liability: U64,
     /// `Vault.sink_haircut_bps` — the discount `validate_aum` applies to every
     /// sink mark.
     #[codama(type = number(u16))]
-    pub sink_haircut_bps: PodU16,
+    pub sink_haircut_bps: U16,
     /// `Vault.sink_max_staleness_seconds`. `None` = the global default,
     /// `Some(0)` = the week-long ceiling, `Some(n)` = `n` seconds (capped at
     /// that week, hence `u32` — see [`PositionInit::max_staleness_seconds`]).
     #[codama(type = option(number(u32, le), fixed))]
-    pub sink_max_staleness_seconds: PodOption<PodU32>,
+    pub sink_max_staleness_seconds: PodOption<U32>,
     /// `Vault.sink_bootstrap_cap_bps` — vault-wide ceiling on aggregate first
     /// sink marks, in bps of validated AUM. `None` = the global default,
     /// `Some(0)` waives the ceiling, `Some(n)` = `n` bps.
     #[codama(type = option(number(u16, le), fixed))]
-    pub sink_bootstrap_cap_bps: PodOption<PodU16>,
+    pub sink_bootstrap_cap_bps: PodOption<U16>,
     /// `Vault.sink_capacity` — how many sink slots may be claimed, up to
     /// `MAX_SINKS`. `0` leaves seized-collateral custody disabled.
     pub sink_capacity: u8,
@@ -123,4 +125,21 @@ pub struct InitializeVaultArgs {
     pub metadata_symbol: PodString<5>,
     #[codama(type = struct(field("len", number(u8)), field("value", fixed_size(string, 200))))]
     pub metadata_uri: PodString<200>,
+}
+
+impl ZcValidate for InitializeVaultArgs {
+    fn validate_ref(value: &Self) -> Result<(), zeropod::Error> {
+        ZcValidate::validate_ref(&value.timelock_delay)?;
+        ZcValidate::validate_ref(&value.instant_redeem_fee_bps)?;
+        ZcValidate::validate_ref(&value.sink_max_staleness_seconds)?;
+        ZcValidate::validate_ref(&value.sink_bootstrap_cap_bps)?;
+        ZcValidate::validate_ref(&value.metadata_name)?;
+        ZcValidate::validate_ref(&value.metadata_symbol)?;
+        ZcValidate::validate_ref(&value.metadata_uri)?;
+        for position in &value.positions {
+            ZcValidate::validate_ref(&position.max_staleness_seconds)?;
+            ZcValidate::validate_ref(&position.max_drift_bps)?;
+        }
+        Ok(())
+    }
 }

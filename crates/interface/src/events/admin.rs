@@ -2,7 +2,7 @@ use {
     codama_macros::CodamaEvent,
     solana_address::Address,
     wincode::{SchemaRead, SchemaWrite},
-    zeropod::pod::{PodI64, PodU64},
+    zeropod::{I64, U64},
 };
 
 /// `Paused.kind`: the vault-flow mask (`Vault.paused`, `Pause` bits).
@@ -19,24 +19,24 @@ pub struct FeeAccrued {
     pub vault: Address,
     /// Curator annual management fee (`Vault.management_fee_bps`), numéraire.
     #[codama(type = number(u64))]
-    pub curator_management: PodU64,
+    pub curator_management: U64,
     /// Protocol annual management fee (`PROTOCOL_MANAGEMENT_FEE_BPS`), numéraire.
     #[codama(type = number(u64))]
-    pub protocol_management: PodU64,
+    pub protocol_management: U64,
     /// Curator HWM performance fee (`Vault.performance_fee_bps`), numéraire.
     #[codama(type = number(u64))]
-    pub curator_performance: PodU64,
+    pub curator_performance: U64,
     /// Protocol HWM performance fee (`PROTOCOL_PERFORMANCE_FEE_BPS`), numéraire.
     #[codama(type = number(u64))]
-    pub protocol_performance: PodU64,
+    pub protocol_performance: U64,
     /// Shares minted to the curator fee PDA (management + performance).
     #[codama(type = number(u64))]
-    pub curator_shares: PodU64,
+    pub curator_shares: U64,
     /// Shares minted to the protocol fee PDA (management + performance).
     #[codama(type = number(u64))]
-    pub protocol_shares: PodU64,
+    pub protocol_shares: U64,
     #[codama(type = number(i64))]
-    pub timestamp: PodI64,
+    pub timestamp: I64,
 }
 
 // VaultEvent::CuratorRotated = 14.
@@ -73,7 +73,7 @@ pub struct Swept {
     pub mint: Address,
     /// Residual custody balance swept out, in the mint's raw units.
     #[codama(type = number(u64))]
-    pub amount: PodU64,
+    pub amount: U64,
 }
 
 // VaultEvent::FeesClaimed = 18.
@@ -87,5 +87,5 @@ pub struct FeesClaimed {
     pub destination: Address,
     /// Fee shares transferred to the claimant.
     #[codama(type = number(u64))]
-    pub shares: PodU64,
+    pub shares: U64,
 }

@@ -7,7 +7,7 @@ use {
     earn_vaults_interface::{
         VaultInstruction,
         arguments::UpdateShareMetaArgs,
-        zeropod::pod::{PodOption, PodString},
+        encoding::{PodOption, PodString},
     },
     solana_address::Address,
     solana_instruction::{AccountMeta, Instruction},

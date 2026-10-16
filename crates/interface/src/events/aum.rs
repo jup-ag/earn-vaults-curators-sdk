@@ -2,7 +2,7 @@ use {
     codama_macros::CodamaEvent,
     solana_address::Address,
     wincode::{SchemaRead, SchemaWrite},
-    zeropod::pod::{PodI64, PodU64},
+    zeropod::{I64, U64},
 };
 
 // VaultEvent::AumValidated = 9.
@@ -13,13 +13,13 @@ use {
 pub struct AumValidated {
     pub vault: Address,
     #[codama(type = number(u64))]
-    pub aum: PodU64,
+    pub aum: U64,
     #[codama(type = number(u64))]
-    pub eff_aum: PodU64,
+    pub eff_aum: U64,
     #[codama(type = number(u64))]
-    pub eff_supply: PodU64,
+    pub eff_supply: U64,
     #[codama(type = number(i64))]
-    pub timestamp: PodI64,
+    pub timestamp: I64,
 }
 
 // VaultEvent::Priced = 11.
@@ -33,11 +33,11 @@ pub struct Priced {
     pub slot: u8,
     /// The mark this write replaced (`0` on the bootstrap write).
     #[codama(type = number(u64))]
-    pub prior_value: PodU64,
+    pub prior_value: U64,
     #[codama(type = number(u64))]
-    pub value: PodU64,
+    pub value: U64,
     #[codama(type = number(i64))]
-    pub timestamp: PodI64,
+    pub timestamp: I64,
 }
 
 // VaultEvent::AssetPriced = 16.
@@ -51,9 +51,9 @@ pub struct AssetPriced {
     pub asset: u8,
     /// The price this write replaced, in numéraire micro-units per whole token.
     #[codama(type = number(u64))]
-    pub prior_price: PodU64,
+    pub prior_price: U64,
     #[codama(type = number(u64))]
-    pub price: PodU64,
+    pub price: U64,
     #[codama(type = number(i64))]
-    pub timestamp: PodI64,
+    pub timestamp: I64,
 }

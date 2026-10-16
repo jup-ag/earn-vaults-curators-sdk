@@ -805,6 +805,10 @@
             "defaultValue": {
               "kind": "numberValueNode",
               "number": 0
+            },
+            "display": {
+              "kind": "structFieldDisplayNode",
+              "skip": "always"
             }
           },
           {
@@ -866,6 +870,10 @@
             "defaultValue": {
               "kind": "numberValueNode",
               "number": 1
+            },
+            "display": {
+              "kind": "structFieldDisplayNode",
+              "skip": "always"
             }
           },
           {
@@ -957,6 +965,10 @@
             "defaultValue": {
               "kind": "numberValueNode",
               "number": 2
+            },
+            "display": {
+              "kind": "structFieldDisplayNode",
+              "skip": "always"
             }
           }
         ],
@@ -1046,6 +1058,10 @@
             "defaultValue": {
               "kind": "numberValueNode",
               "number": 3
+            },
+            "display": {
+              "kind": "structFieldDisplayNode",
+              "skip": "always"
             }
           },
           {
@@ -1192,6 +1208,10 @@
             "defaultValue": {
               "kind": "numberValueNode",
               "number": 4
+            },
+            "display": {
+              "kind": "structFieldDisplayNode",
+              "skip": "always"
             }
           }
         ],
@@ -1293,6 +1313,10 @@
             "defaultValue": {
               "kind": "numberValueNode",
               "number": 5
+            },
+            "display": {
+              "kind": "structFieldDisplayNode",
+              "skip": "always"
             }
           }
         ],
@@ -1376,6 +1400,10 @@
             "defaultValue": {
               "kind": "numberValueNode",
               "number": 6
+            },
+            "display": {
+              "kind": "structFieldDisplayNode",
+              "skip": "always"
             }
           }
         ],
@@ -1429,6 +1457,10 @@
             "defaultValue": {
               "kind": "numberValueNode",
               "number": 7
+            },
+            "display": {
+              "kind": "structFieldDisplayNode",
+              "skip": "always"
             }
           },
           {
@@ -1497,6 +1529,10 @@
             "defaultValue": {
               "kind": "numberValueNode",
               "number": 8
+            },
+            "display": {
+              "kind": "structFieldDisplayNode",
+              "skip": "always"
             }
           }
         ],
@@ -1556,6 +1592,10 @@
             "defaultValue": {
               "kind": "numberValueNode",
               "number": 9
+            },
+            "display": {
+              "kind": "structFieldDisplayNode",
+              "skip": "always"
             }
           },
           {
@@ -1630,6 +1670,10 @@
             "defaultValue": {
               "kind": "numberValueNode",
               "number": 10
+            },
+            "display": {
+              "kind": "structFieldDisplayNode",
+              "skip": "always"
             }
           },
           {
@@ -1707,6 +1751,12 @@
             "name": "program",
             "isWritable": false,
             "isSigner": false
+          },
+          {
+            "kind": "instructionAccountNode",
+            "name": "vaultAuthority",
+            "isWritable": false,
+            "isSigner": false
           }
         ],
         "arguments": [
@@ -1722,6 +1772,10 @@
             "defaultValue": {
               "kind": "numberValueNode",
               "number": 11
+            },
+            "display": {
+              "kind": "structFieldDisplayNode",
+              "skip": "always"
             }
           },
           {
@@ -1863,6 +1917,10 @@
             "defaultValue": {
               "kind": "numberValueNode",
               "number": 12
+            },
+            "display": {
+              "kind": "structFieldDisplayNode",
+              "skip": "always"
             }
           }
         ],
@@ -1946,6 +2004,10 @@
             "defaultValue": {
               "kind": "numberValueNode",
               "number": 13
+            },
+            "display": {
+              "kind": "structFieldDisplayNode",
+              "skip": "always"
             }
           }
         ],
@@ -2029,6 +2091,10 @@
             "defaultValue": {
               "kind": "numberValueNode",
               "number": 14
+            },
+            "display": {
+              "kind": "structFieldDisplayNode",
+              "skip": "always"
             }
           }
         ],
@@ -2088,6 +2154,10 @@
             "defaultValue": {
               "kind": "numberValueNode",
               "number": 15
+            },
+            "display": {
+              "kind": "structFieldDisplayNode",
+              "skip": "always"
             }
           },
           {
@@ -2209,6 +2279,10 @@
             "defaultValue": {
               "kind": "numberValueNode",
               "number": 16
+            },
+            "display": {
+              "kind": "structFieldDisplayNode",
+              "skip": "always"
             }
           },
           {
@@ -2316,6 +2390,10 @@
             "defaultValue": {
               "kind": "numberValueNode",
               "number": 17
+            },
+            "display": {
+              "kind": "structFieldDisplayNode",
+              "skip": "always"
             }
           }
         ],
@@ -2423,6 +2501,10 @@
             "defaultValue": {
               "kind": "numberValueNode",
               "number": 18
+            },
+            "display": {
+              "kind": "structFieldDisplayNode",
+              "skip": "always"
             }
           },
           {
@@ -2500,6 +2582,10 @@
             "defaultValue": {
               "kind": "numberValueNode",
               "number": 19
+            },
+            "display": {
+              "kind": "structFieldDisplayNode",
+              "skip": "always"
             }
           },
           {
@@ -2562,6 +2648,10 @@
             "defaultValue": {
               "kind": "numberValueNode",
               "number": 20
+            },
+            "display": {
+              "kind": "structFieldDisplayNode",
+              "skip": "always"
             }
           }
         ],
@@ -2627,6 +2717,10 @@
             "defaultValue": {
               "kind": "numberValueNode",
               "number": 21
+            },
+            "display": {
+              "kind": "structFieldDisplayNode",
+              "skip": "always"
             }
           },
           {
@@ -2724,6 +2818,10 @@
             "defaultValue": {
               "kind": "numberValueNode",
               "number": 22
+            },
+            "display": {
+              "kind": "structFieldDisplayNode",
+              "skip": "always"
             }
           }
         ],
@@ -2765,6 +2863,10 @@
             "defaultValue": {
               "kind": "numberValueNode",
               "number": 23
+            },
+            "display": {
+              "kind": "structFieldDisplayNode",
+              "skip": "always"
             }
           },
           {
@@ -2869,6 +2971,10 @@
             "defaultValue": {
               "kind": "numberValueNode",
               "number": 24
+            },
+            "display": {
+              "kind": "structFieldDisplayNode",
+              "skip": "always"
             }
           },
           {
@@ -2973,6 +3079,10 @@
             "defaultValue": {
               "kind": "numberValueNode",
               "number": 25
+            },
+            "display": {
+              "kind": "structFieldDisplayNode",
+              "skip": "always"
             }
           },
           {
@@ -3083,6 +3193,10 @@
             "defaultValue": {
               "kind": "numberValueNode",
               "number": 26
+            },
+            "display": {
+              "kind": "structFieldDisplayNode",
+              "skip": "always"
             }
           }
         ],
@@ -3172,6 +3286,10 @@
             "defaultValue": {
               "kind": "numberValueNode",
               "number": 27
+            },
+            "display": {
+              "kind": "structFieldDisplayNode",
+              "skip": "always"
             }
           }
         ],
@@ -3225,6 +3343,10 @@
             "defaultValue": {
               "kind": "numberValueNode",
               "number": 28
+            },
+            "display": {
+              "kind": "structFieldDisplayNode",
+              "skip": "always"
             }
           },
           {
