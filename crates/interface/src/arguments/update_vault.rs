@@ -38,7 +38,7 @@ pub struct AssetUpdate {
     /// Confidence cap in bps of price; `0` means the global default.
     #[codama(type = option(number(u16, le), fixed))]
     pub max_confidence_bps: PodOption<U16>,
-    /// Per-asset strategy-outflow ceiling; `0` = unlimited.
+    /// Per-asset strategy-outflow ceiling; `0` disables deployment, `u64::MAX` is unlimited.
     #[codama(type = option(number(u64, le), fixed))]
     pub max_deployed: PodOption<U64>,
     /// Restate the remaining `deployed` charge across all protocols in raw token
@@ -139,7 +139,7 @@ pub struct AssetAdd {
     /// The decimal scale the feed quotes its raw mantissa at; `0` leaves the
     /// source's own. See [`AssetUpdate::report_decimals`].
     pub report_decimals: u8,
-    /// Strategy-outflow ceiling; `0` = unlimited.
+    /// Strategy-outflow ceiling; `0` disables deployment, `u64::MAX` is unlimited.
     #[codama(type = number(u64))]
     pub max_deployed: U64,
     /// Deposit capacity ceiling; `0` = unlimited.

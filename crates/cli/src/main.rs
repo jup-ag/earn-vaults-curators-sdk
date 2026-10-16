@@ -350,7 +350,8 @@ enum Cmd {
         #[arg(long, value_name = "CAP", requires = "asset_index")]
         max_deposit: Option<u64>,
         /// Strategy-outflow ceiling: reject routed CPIs that would push this
-        /// asset's `deployed` above CAP (raw token units, 0 = unlimited).
+        /// asset's `deployed` above CAP (raw token units, 0 disables deployment,
+        /// 18446744073709551615 = unlimited).
         #[arg(long, value_name = "CAP", requires = "asset_index")]
         max_deployed: Option<u64>,
         /// Restate this asset's remaining `deployed` charge across all protocols
@@ -1601,8 +1602,8 @@ fn run_update_vault(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
                 chainlink: add_asset_chainlink,
                 report_decimals: add_asset_report_decimals.unwrap_or(0),
                 deposit_enabled: add_asset_deposit_enabled,
-                // 0 = unlimited; narrow later via --asset-index caps.
-                max_deployed: 0,
+                // Unlimited; narrow later via --asset-index caps.
+                max_deployed: u64::MAX,
                 max_deposit: 0,
             })
         })

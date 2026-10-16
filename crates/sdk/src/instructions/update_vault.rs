@@ -103,7 +103,7 @@ pub struct AssetAddFields {
     /// by 1e10 prices the asset low enough to redeem the holding for dust.
     pub report_decimals: u8,
     pub deposit_enabled: bool,
-    /// Strategy-outflow ceiling; `0` = unlimited.
+    /// Strategy-outflow ceiling; `0` disables deployment, `u64::MAX` is unlimited.
     pub max_deployed: u64,
     /// Deposit capacity ceiling; `0` = unlimited.
     pub max_deposit: u64,
@@ -111,8 +111,8 @@ pub struct AssetAddFields {
 
 /// Asset-row update: `index` into `Vault.assets` plus the fields to
 /// rewrite (`None` fields stay untouched). Oracle rotation is the deprecated
-/// feed path; `max_deployed`/`max_deposit` are the per-asset ceilings
-/// (`0` = unlimited).
+/// feed path. `max_deployed = 0` disables deployment; `u64::MAX` is unlimited.
+/// The separate deposit ceiling still uses `max_deposit = 0` for unlimited.
 #[derive(Default)]
 pub struct AssetUpdateFields {
     pub index: u8,
@@ -126,6 +126,7 @@ pub struct AssetUpdateFields {
     /// Independent future timestamp tolerance; zero rejects future observations.
     pub max_future_skew_seconds: Option<u32>,
     pub max_confidence_bps: Option<u16>,
+    /// Strategy-outflow ceiling; `0` disables deployment, `u64::MAX` is unlimited.
     pub max_deployed: Option<u64>,
     /// Restate the remaining `deployed` charge across all protocols in raw token
     /// units after verifying a principal return. CCIP OffRamp deliveries and

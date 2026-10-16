@@ -26,7 +26,7 @@ pub struct InitializeVault<'a> {
     pub other_assets: Vec<Address>,
     pub other_oracles: Vec<Address>,
     /// Per-asset strategy-outflow ceilings, same order as `base_assets` then
-    /// `other_assets`; empty = unlimited for all.
+    /// `other_assets`; empty = `u64::MAX` (unlimited) for all; `0` disables deployment.
     pub max_deployed: Vec<u64>,
     /// Per-asset deposit capacity ceilings; empty = unlimited for all.
     pub max_deposit: Vec<u64>,
@@ -133,8 +133,8 @@ impl InitializeVault<'_> {
             assets[self.base_assets.len() + j].oracle = *oracle;
             mints.push(*asset_mint);
         }
-        for (i, v) in self.max_deployed.iter().enumerate() {
-            assets[i].max_deployed = U64::from(*v);
+        for (i, asset) in assets[..asset_count].iter_mut().enumerate() {
+            asset.max_deployed = U64::from(self.max_deployed.get(i).copied().unwrap_or(u64::MAX));
         }
         for (i, v) in self.max_deposit.iter().enumerate() {
             assets[i].max_deposit = U64::from(*v);
@@ -287,6 +287,25 @@ mod tests {
         assert_eq!(positions[0].protocol, 2);
         assert_eq!(positions[0].flags, 9);
         assert_eq!(positions[1].flags, 0);
+    }
+
+    #[test]
+    fn deployment_caps_default_to_max_and_preserve_explicit_zero() {
+        let mut init = fixture();
+        init.max_deployed.clear();
+        let count = init.asset_count().unwrap();
+        let (_, assets, _) = init.pack_assets(count).unwrap();
+        assert!(
+            assets[..count]
+                .iter()
+                .all(|a| a.max_deployed.get() == u64::MAX)
+        );
+        assert!(assets[count..].iter().all(|a| a.max_deployed.get() == 0));
+
+        init.max_deployed = vec![0, u64::MAX];
+        let (_, assets, _) = init.pack_assets(count).unwrap();
+        assert_eq!(assets[0].max_deployed.get(), 0);
+        assert_eq!(assets[1].max_deployed.get(), u64::MAX);
     }
 
     #[test]

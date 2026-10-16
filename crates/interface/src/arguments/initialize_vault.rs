@@ -55,6 +55,7 @@ pub struct AssetInit {
     ///
     /// [`AssetConfig::report_decimals`]: crate::state::AssetConfig::report_decimals
     pub report_decimals: u8,
+    /// Strategy-outflow ceiling; `0` disables deployment, `u64::MAX` is unlimited.
     #[codama(type = number(u64))]
     pub max_deployed: U64,
     #[codama(type = number(u64))]
