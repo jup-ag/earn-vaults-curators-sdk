@@ -28,10 +28,9 @@ pub struct PositionInit {
     /// [`MAX_PARAM_STALENESS_SECONDS`]: crate::constants::MAX_PARAM_STALENESS_SECONDS
     #[codama(type = option(number(u32, le), fixed))]
     pub max_staleness_seconds: PodOption<U32>,
-    /// Drift budget per window for this slot's mark. `None` = the global
-    /// default ([`MAX_DRIFT_BPS`]), `Some(0)` waives the budget — any mark a
-    /// PRICE delegate posts is then accepted, bootstrap included — and
-    /// `Some(n)` = `n` bps.
+    /// Drift budget per window for this slot's mark. `None` or `Some(0)` uses
+    /// the global default ([`MAX_DRIFT_BPS`]). `Some(u16::MAX)` waives the
+    /// budget, including bootstrap; other `Some(n)` sets a budget of `n` bps.
     ///
     /// [`MAX_DRIFT_BPS`]: crate::constants::MAX_DRIFT_BPS
     #[codama(type = option(number(u16, le), fixed))]
@@ -58,6 +57,7 @@ pub struct AssetInit {
     /// Strategy-outflow ceiling; `0` disables deployment, `u64::MAX` is unlimited.
     #[codama(type = number(u64))]
     pub max_deployed: U64,
+    /// Deposit capacity ceiling; `0` disables deposits, `u64::MAX` is unlimited.
     #[codama(type = number(u64))]
     pub max_deposit: U64,
 }
@@ -113,8 +113,8 @@ pub struct InitializeVaultArgs {
     #[codama(type = option(number(u32, le), fixed))]
     pub sink_max_staleness_seconds: PodOption<U32>,
     /// `Vault.sink_bootstrap_cap_bps` — vault-wide ceiling on aggregate first
-    /// sink marks, in bps of validated AUM. `None` = the global default,
-    /// `Some(0)` waives the ceiling, `Some(n)` = `n` bps.
+    /// sink marks, in bps of validated AUM. `None` or `Some(0)` uses the global
+    /// default; `Some(u16::MAX)` waives the ceiling; other `Some(n)` = `n` bps.
     #[codama(type = option(number(u16, le), fixed))]
     pub sink_bootstrap_cap_bps: PodOption<U16>,
     /// `Vault.sink_capacity` — how many sink slots may be claimed, up to

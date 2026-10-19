@@ -55,7 +55,8 @@ pub struct UpdateVault {
     /// Freshness window every sink mark is held to; `0` = the global default.
     pub sink_max_staleness_seconds: Option<u64>,
     /// Vault-wide ceiling on aggregate first sink marks, in bps of validated
-    /// AUM; `0` = the global default. Later marks use the global walk budget.
+    /// AUM; `0` selects the global default, `u16::MAX` waives the ceiling,
+    /// and `None` leaves it unchanged. Later marks use the global walk budget.
     pub sink_bootstrap_cap_bps: Option<u16>,
     /// How many sink slots may be claimed, up to `MAX_SINKS`. `Some(0)` stops
     /// new claims; occupied slots keep their marks.
@@ -105,14 +106,14 @@ pub struct AssetAddFields {
     pub deposit_enabled: bool,
     /// Strategy-outflow ceiling; `0` disables deployment, `u64::MAX` is unlimited.
     pub max_deployed: u64,
-    /// Deposit capacity ceiling; `0` = unlimited.
+    /// Deposit capacity ceiling; `0` disables deposits, `u64::MAX` is unlimited.
     pub max_deposit: u64,
 }
 
 /// Asset-row update: `index` into `Vault.assets` plus the fields to
 /// rewrite (`None` fields stay untouched). Oracle rotation is the deprecated
 /// feed path. `max_deployed = 0` disables deployment; `u64::MAX` is unlimited.
-/// The separate deposit ceiling still uses `max_deposit = 0` for unlimited.
+/// `max_deposit` uses the same convention: `0` disables deposits, `u64::MAX` is unlimited.
 #[derive(Default)]
 pub struct AssetUpdateFields {
     pub index: u8,
@@ -135,6 +136,7 @@ pub struct AssetUpdateFields {
     /// Listed Offerbook withdrawals already fold the position mark: do not reset
     /// it; reconcile and re-attest the remaining value with `PriceOpaque`.
     pub deployed: Option<u64>,
+    /// Deposit capacity ceiling; `0` disables deposits, `u64::MAX` is unlimited.
     pub max_deposit: Option<u64>,
     /// Toggle deposits for this asset; a hand-priced row may not be
     /// deposit-enabled. The lowest-index enabled row is canonical for instant
@@ -158,6 +160,8 @@ pub struct PositionUpdateFields {
     /// Index into `Vault.positions`.
     pub index: u8,
     pub max_staleness_seconds: Option<u64>,
+    /// Per-position drift override; `0` selects the global default,
+    /// `u16::MAX` waives the budget, and `None` leaves it unchanged.
     pub max_drift_bps: Option<u16>,
     pub reset: Option<bool>,
 }

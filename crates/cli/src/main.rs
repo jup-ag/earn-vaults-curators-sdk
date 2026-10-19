@@ -27,7 +27,7 @@ use {
             ClaimFees, ClaimRedeem, CrystallizeFees, FulfillRedeem, GrantRevokeDelegate,
             InitializeExtraAccountMetas, InitializeVault, PositionUpdateFields, PriceOpaque,
             ProtocolCpi, Redeem, RedeemDirect, RefreshPrices, SetProtocolPolicy, SubscribeDirect,
-            UpdateShareMeta, UpdateVault, ValidateAum,
+            SweepIdle, UpdateShareMeta, UpdateVault, ValidateAum,
         },
         pda::{
             derive_associated_token_account, derive_share_mint, derive_vault,
@@ -150,10 +150,10 @@ enum Cmd {
         /// Flag values: REQUIRED_IN_AUM 1, DEBT 4, ENABLED 8, LENDER_ONLY 64
         /// (Offerbook or JupiterLend; on JupiterLend it means Earn-only — Fluid
         /// Vaults refused for good, instant redemption admissible: `0:2:73:900:50`).
-        /// STALENESS and DRIFT are three-way: leave the field EMPTY
-        /// (`2:2:9:::50`) for the program default (60s / 2%), pass `0` for the
-        /// loosest setting (the 7-day staleness ceiling / no drift budget), or
-        /// pass the value.
+        /// Leave STALENESS or DRIFT EMPTY (`2:2:9::`) for the program default
+        /// (60s / 2%). STALENESS `0` selects the 7-day ceiling; DRIFT `65535`
+        /// waives the budget, while DRIFT `0` selects the 2% default.
+        /// Other values set staleness in seconds and drift in bps.
         #[arg(long = "position", value_name = "SPEC")]
         positions: Vec<String>,
         /// Seconds between Redeem and ClaimRedeem. Omit for the 1-day default,
@@ -255,6 +255,19 @@ enum Cmd {
         #[arg(long)]
         curator: PathBuf,
     },
+    /// Sweep a listed asset or written-off sink's idle custody to an existing
+    /// token account. Requires zero share supply and zero pending redeems.
+    SweepIdle {
+        #[arg(long)]
+        curator: PathBuf,
+        #[arg(long)]
+        vault: Address,
+        #[arg(long)]
+        mint: Address,
+        /// Existing token account holding the same mint.
+        #[arg(long)]
+        destination_token_account: Address,
+    },
     /// UpdateVault: curator-only knobs. Omitted flags are left untouched.
     /// NOTE: `timelock-delay` only affects redeems queued *after* this call —
     /// an escrow's `unlock_at` is frozen at Redeem time.
@@ -346,7 +359,8 @@ enum Cmd {
         #[arg(long)]
         asset_index: Option<u8>,
         /// Capacity ceiling: reject subscriptions that would push this asset's
-        /// idle custody plus `deployed` above CAP (raw token units, 0 = unlimited).
+        /// idle custody plus `deployed` above CAP (raw token units, 0 disables deposits,
+        /// 18446744073709551615 = unlimited).
         #[arg(long, value_name = "CAP", requires = "asset_index")]
         max_deposit: Option<u64>,
         /// Strategy-outflow ceiling: reject routed CPIs that would push this
@@ -416,7 +430,8 @@ enum Cmd {
         #[arg(long, value_name = "SECS")]
         max_aum_staleness: Option<u32>,
         /// Vault-wide ceiling on aggregate sink FIRST marks, in bps of validated
-        /// AUM (0 = the 2% default). Size it to the total seized-collateral book.
+        /// AUM (0 = the 2% default, 65535 = uncapped; omit to leave unchanged).
+        /// Size it to the total seized-collateral book.
         /// Later marks use the global 2%-per-window walk rate.
         #[arg(long, value_name = "BPS")]
         sink_bootstrap_cap_bps: Option<u16>,
@@ -818,8 +833,8 @@ fn parse_position(spec: &str) -> Result<(u8, PositionInit)> {
     {
         f[i].parse().map_err(|e| anyhow!("{what}: {e}"))
     }
-    // STALENESS and DRIFT are three-way: empty leaves the program default, `0`
-    // is the loosest setting, anything else is the value.
+    // Empty fields leave the program default; explicit values pass through.
+    // STALENESS 0 selects seven days; DRIFT 65535 waives its budget, 0 defaults.
     fn opt<T: std::str::FromStr, P: earn_vaults_interface::encoding::ZcElem + From<T>>(
         f: &[&str],
         i: usize,
@@ -1123,6 +1138,7 @@ fn dispatch(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
         command @ Cmd::Subscribe { .. } => run_subscribe(ctx, command),
         command @ Cmd::RedeemDirect { .. } => run_redeem_direct(ctx, command),
         command @ Cmd::ValidateAum { .. } => run_validate_aum(ctx, command),
+        command @ Cmd::SweepIdle { .. } => run_sweep_idle(ctx, command),
         command @ Cmd::UpdateVault { .. } => run_update_vault(ctx, command),
         command @ Cmd::UpdateShareMeta { .. } => run_update_share_meta(ctx, command),
         command @ Cmd::Crystallize { .. } => run_crystallize(ctx, command),
@@ -1538,6 +1554,33 @@ fn run_validate_aum(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
     Ok(())
 }
 
+fn run_sweep_idle(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
+    let Cmd::SweepIdle {
+        curator,
+        vault,
+        mint,
+        destination_token_account,
+    } = command
+    else {
+        unreachable!("dispatch passed the wrong command to run_sweep_idle")
+    };
+
+    let curator_kp = load_kp(&curator)?;
+    let ix = SweepIdle {
+        curator: curator_kp.pubkey(),
+        vault,
+        mint,
+        token_program: mint_token_program(ctx.url, &mint)?,
+        destination_token_account,
+    }
+    .into_instruction();
+    println!(
+        "idle custody swept ({})",
+        send_opts(ctx.url, &[ix], &[&curator_kp], &[], false)?
+    );
+    Ok(())
+}
+
 fn run_update_vault(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
     let Cmd::UpdateVault {
         curator,
@@ -1604,7 +1647,7 @@ fn run_update_vault(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
                 deposit_enabled: add_asset_deposit_enabled,
                 // Unlimited; narrow later via --asset-index caps.
                 max_deployed: u64::MAX,
-                max_deposit: 0,
+                max_deposit: u64::MAX,
             })
         })
         .transpose()?;
@@ -2155,6 +2198,47 @@ mod tests {
     use super::*;
 
     #[test]
+    fn sweep_idle_cli_requires_vault_mint_and_destination() {
+        let vault = Address::new_from_array([3; 32]);
+        let mint = Address::new_from_array([1; 32]);
+        let destination = Address::new_from_array([2; 32]);
+        let vault_arg = vault.to_string();
+        let mint_arg = mint.to_string();
+        let destination_arg = destination.to_string();
+        let args = [
+            "earn-vaults",
+            "sweep-idle",
+            "--curator",
+            "curator.json",
+            "--vault",
+            &vault_arg,
+            "--mint",
+            &mint_arg,
+            "--destination-token-account",
+            &destination_arg,
+        ];
+        let cli = Cli::try_parse_from(args).unwrap();
+        assert!(matches!(
+            cli.cmd,
+            Cmd::SweepIdle { vault: v, mint: m, destination_token_account: d, .. } if v == vault && m == mint && d == destination
+        ));
+        assert!(Cli::try_parse_from(&args[..8]).is_err());
+        assert!(
+            Cli::try_parse_from([
+                "earn-vaults",
+                "sweep-idle",
+                "--curator",
+                "curator.json",
+                "--mint",
+                &mint_arg,
+                "--destination-token-account",
+                &destination_arg,
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
     fn show_cli_accepts_addresses_and_rpc_without_state_or_keypair() {
         let vault = Address::new_from_array([1; 32]);
         let user = Address::new_from_array([2; 32]);
@@ -2209,14 +2293,14 @@ mod tests {
         assert_eq!((slot, p.protocol, p.flags), (0, 0, 9));
         assert_eq!(p.max_drift_bps.get().map(u16::from), Some(200));
 
-        // Empty window fields ask for the program's default; `0` for the
-        // loosest setting. The two must not collapse into the same wire value.
+        // Empty fields ask for defaults. Zero selects the widest staleness
+        // window; MAX explicitly waives the drift budget.
         let (_, d) = parse_position("0:0:9::").unwrap();
         assert_eq!(d.max_staleness_seconds.get(), None);
         assert_eq!(d.max_drift_bps.get(), None);
-        let (_, w) = parse_position("0:0:9:0:0").unwrap();
+        let (_, w) = parse_position("0:0:9:0:65535").unwrap();
         assert_eq!(w.max_staleness_seconds.get().map(u32::from), Some(0));
-        assert_eq!(w.max_drift_bps.get().map(u16::from), Some(0));
+        assert_eq!(w.max_drift_bps.get().map(u16::from), Some(u16::MAX));
 
         for (spec, what) in [
             ("256:0:9:86400:200", "slot"),

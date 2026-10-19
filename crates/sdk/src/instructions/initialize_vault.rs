@@ -28,7 +28,8 @@ pub struct InitializeVault<'a> {
     /// Per-asset strategy-outflow ceilings, same order as `base_assets` then
     /// `other_assets`; empty = `u64::MAX` (unlimited) for all; `0` disables deployment.
     pub max_deployed: Vec<u64>,
-    /// Per-asset deposit capacity ceilings; empty = unlimited for all.
+    /// Per-asset deposit capacity ceilings; empty = `u64::MAX` (unlimited) for all.
+    /// `0` disables deposits.
     pub max_deposit: Vec<u64>,
     /// Rows whose `oracle` is a **Chainlink Data Streams** feed id rather than a
     /// Pyth one, by index into `base_assets` then `other_assets`; empty = all
@@ -68,8 +69,8 @@ pub struct InitializeVault<'a> {
     /// (capped at that week, so the argument is 32-bit).
     pub sink_max_staleness_seconds: Option<u32>,
     /// Vault-wide ceiling on aggregate first sink marks, in bps of validated
-    /// AUM. `None` = the global default, `Some(0)` waives the ceiling,
-    /// `Some(n)` = `n` bps. Later marks use the global walk budget.
+    /// AUM. `None` or `Some(0)` uses the global default; `Some(u16::MAX)` waives
+    /// the ceiling; other `Some(n)` = `n` bps. Later marks use the global walk budget.
     pub sink_bootstrap_cap_bps: Option<u16>,
     /// How many sink slots may be claimed, up to `MAX_SINKS`. `0` leaves
     /// seized-collateral custody disabled — an unlisted in-flow then reverts
@@ -135,9 +136,7 @@ impl InitializeVault<'_> {
         }
         for (i, asset) in assets[..asset_count].iter_mut().enumerate() {
             asset.max_deployed = U64::from(self.max_deployed.get(i).copied().unwrap_or(u64::MAX));
-        }
-        for (i, v) in self.max_deposit.iter().enumerate() {
-            assets[i].max_deposit = U64::from(*v);
+            asset.max_deposit = U64::from(self.max_deposit.get(i).copied().unwrap_or(u64::MAX));
         }
         for i in &self.chainlink_assets {
             if *i >= asset_count {
@@ -290,22 +289,30 @@ mod tests {
     }
 
     #[test]
-    fn deployment_caps_default_to_max_and_preserve_explicit_zero() {
+    fn caps_default_to_max_and_preserve_explicit_zero() {
         let mut init = fixture();
         init.max_deployed.clear();
+        init.max_deposit.clear();
         let count = init.asset_count().unwrap();
         let (_, assets, _) = init.pack_assets(count).unwrap();
         assert!(
             assets[..count]
                 .iter()
-                .all(|a| a.max_deployed.get() == u64::MAX)
+                .all(|a| a.max_deployed.get() == u64::MAX && a.max_deposit.get() == u64::MAX)
         );
-        assert!(assets[count..].iter().all(|a| a.max_deployed.get() == 0));
+        assert!(
+            assets[count..]
+                .iter()
+                .all(|a| a.max_deployed.get() == 0 && a.max_deposit.get() == 0)
+        );
 
         init.max_deployed = vec![0, u64::MAX];
+        init.max_deposit = vec![0, u64::MAX];
         let (_, assets, _) = init.pack_assets(count).unwrap();
         assert_eq!(assets[0].max_deployed.get(), 0);
         assert_eq!(assets[1].max_deployed.get(), u64::MAX);
+        assert_eq!(assets[0].max_deposit.get(), 0);
+        assert_eq!(assets[1].max_deposit.get(), u64::MAX);
     }
 
     #[test]

@@ -16,6 +16,18 @@ and fees. It reads directly from the vault address, without a state file or
 keypair. Add `--user <pubkey>` to include that investor's shares and redeem value.
 Use `--rpc <url>` or `SOLANA_RPC_URL` to select the cluster (default: mainnet).
 
+To sweep residual custody during teardown, once share supply and pending
+redeems are both zero, run the curator-signed command for each listed asset or
+written-off sink. The destination must be an existing token account for the mint:
+
+```sh
+earn-vaults --rpc RPC_URL sweep-idle \
+  --curator CURATOR_KEYPAIR --vault VAULT_PUBKEY --mint ASSET_MINT \
+  --destination-token-account DESTINATION_TOKEN_ACCOUNT
+```
+
+This command uses the supplied vault address without reading a state file.
+
 Amounts are raw integers: USD values use 6 decimals, token balances use the
 asset's `decimals`, and NAV/HWM use the interface's `NAV_SCALE` fixed point.
 Timestamps are Unix seconds; `last_priced_at` records the last on-chain pricing,

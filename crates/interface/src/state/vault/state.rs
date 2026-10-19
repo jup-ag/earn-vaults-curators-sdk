@@ -1634,7 +1634,7 @@ mod tests {
         let mut v: Vault = unsafe { core::mem::zeroed() };
         v.instant_redeem_fee_bps = U16::from(1_000u16);
         v.positions[0].flags = POSITION_FLAG_ENABLED | POSITION_FLAG_REQUIRED_IN_AUM;
-        // window_bps(Some(0)) stores the explicit waiver as u16::MAX.
+        // window_bps preserves the explicit u16::MAX waiver.
         v.positions[0].max_drift_bps = U16::from(u16::MAX);
 
         assert_eq!(
