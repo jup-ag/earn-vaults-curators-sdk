@@ -55,15 +55,15 @@ pub const CHAINLINK_OCR2_STORE_ID: Address =
     Address::from_str_const("HEvSKofvBgfaexv23kMabbYqxasxU3mQ4ibBMEmJWHny");
 
 /// Stored in a bps window (position drift, sink bootstrap cap) the curator
-/// explicitly waived — `Some(0)` at the argument layer, where `None` means "the
-/// global default" and a plain `0` would otherwise be indistinguishable from
-/// it. Outside the `0..=10_000` band every real value lives in, so a read site
+/// explicitly waived — `Some(u16::MAX)` at the argument layer, where `None`
+/// and `Some(0)` mean "the global default".
+/// Outside the `0..=10_000` band every real value lives in, so a read site
 /// tells it apart from a configured cap. Staleness has no such sentinel: its
 /// waiver is [`MAX_PARAM_STALENESS_SECONDS`] itself, the ceiling being the point.
 pub const UNBOUNDED_BPS: u16 = u16::MAX;
 
 /// Whether a stored position drift or sink bootstrap cap is waived.
-/// `window_bps` maps `Some(0)` to this sentinel at vault initialization and
+/// `window_bps` preserves this sentinel at vault initialization and
 /// when adding a position; updates to existing fields accept it directly.
 #[inline]
 pub const fn is_waived_bps(stored: u16) -> bool {

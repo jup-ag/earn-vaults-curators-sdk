@@ -48,6 +48,7 @@ pub struct AssetConfig {
     /// Strategy-outflow ceiling; `0` disables deployment, `u64::MAX` is unlimited.
     #[codama(type = number(u64))]
     pub max_deployed: U64,
+    /// Deposit capacity ceiling; `0` disables deposits, `u64::MAX` is unlimited.
     #[codama(type = number(u64))]
     pub max_deposit: U64,
     #[codama(type = number(i64))]

@@ -34,15 +34,15 @@ pub fn window_seconds(arg: PodOption<U32>) -> Result<U64, ProgramError> {
 }
 
 /// Resolve a curator-set position drift or sink bootstrap cap argument to its
-/// stored value. `None` stores `0` (the default); `Some(0)` stores the waiver
-/// sentinel. Explicit caps through 10,000 bps are valid, including values
-/// above the 200 bps default. A cap of 10,000 is a real 100% budget, distinct
-/// from waiving the budget. Updates to stored values use separate rules.
+/// stored value. `None` and `Some(0)` store `0` (the default); `Some(u16::MAX)`
+/// stores the waiver sentinel. Explicit caps through 10,000 bps are valid,
+/// including values above the 200 bps default. A cap of 10,000 is a real 100% budget, distinct
+/// from waiving the budget. Updates to stored values use the same encoding.
 #[inline]
 pub fn window_bps(arg: PodOption<U16>) -> Result<U16, ProgramError> {
     Ok(match arg.get().map(u16::from) {
         None => U16::ZERO,
-        Some(0) => U16::from(UNBOUNDED_BPS),
+        Some(UNBOUNDED_BPS) => U16::from(UNBOUNDED_BPS),
         Some(n) if n <= 10_000 => U16::from(n),
         Some(_) => return Err(ProgramError::InvalidArgument),
     })
@@ -73,12 +73,17 @@ mod tests {
         );
 
         assert_eq!(window_bps(PodOption::none()).unwrap().get(), 0);
+        assert_eq!(window_bps(PodOption::some(U16::ZERO)).unwrap().get(), 0);
         assert_eq!(
-            window_bps(PodOption::some(U16::ZERO)).unwrap().get(),
+            window_bps(PodOption::some(U16::from(u16::MAX)))
+                .unwrap()
+                .get(),
             UNBOUNDED_BPS
         );
         assert!(crate::constants::is_waived_bps(
-            window_bps(PodOption::some(U16::ZERO)).unwrap().get()
+            window_bps(PodOption::some(U16::from(u16::MAX)))
+                .unwrap()
+                .get()
         ));
         assert_eq!(
             window_bps(PodOption::some(U16::from(500))).unwrap().get(),

@@ -49,7 +49,7 @@ pub struct AssetUpdate {
     /// it; reconcile and re-attest the remaining value with `PriceOpaque`.
     #[codama(type = option(number(u64, le), fixed))]
     pub deployed: PodOption<U64>,
-    /// Per-asset deposit capacity ceiling; `0` = unlimited.
+    /// Per-asset deposit capacity ceiling; `0` disables deposits, `u64::MAX` is unlimited.
     #[codama(type = option(number(u64, le), fixed))]
     pub max_deposit: PodOption<U64>,
     /// Toggle deposits for this asset (`1` enable / `0` disable). Its own
@@ -99,7 +99,8 @@ pub struct PositionUpdate {
     /// Per-position staleness override; `0` means the global default.
     #[codama(type = option(number(u64, le), fixed))]
     pub max_staleness_seconds: PodOption<U64>,
-    /// Per-position drift override; `0` means the global default.
+    /// Per-position drift override; `0` selects the global default,
+    /// `u16::MAX` waives the budget, and `None` leaves it unchanged.
     #[codama(type = option(number(u16, le), fixed))]
     pub max_drift_bps: PodOption<U16>,
     /// `Some(1)` resets a non-DEBT row to never-priced (clears `PRICED` /
@@ -142,7 +143,7 @@ pub struct AssetAdd {
     /// Strategy-outflow ceiling; `0` disables deployment, `u64::MAX` is unlimited.
     #[codama(type = number(u64))]
     pub max_deployed: U64,
-    /// Deposit capacity ceiling; `0` = unlimited.
+    /// Deposit capacity ceiling; `0` disables deposits, `u64::MAX` is unlimited.
     #[codama(type = number(u64))]
     pub max_deposit: U64,
 }
@@ -177,8 +178,8 @@ pub struct PositionAdd {
     /// [`PositionInit::max_staleness_seconds`]: crate::arguments::PositionInit::max_staleness_seconds
     #[codama(type = option(number(u32, le), fixed))]
     pub max_staleness_seconds: PodOption<U32>,
-    /// Drift budget for the new slot — `None` = the global default, `Some(0)`
-    /// waives it, `Some(n)` = `n` bps.
+    /// Drift budget for the new slot: `None` or `Some(0)` uses the global
+    /// default; `Some(u16::MAX)` waives it; other `Some(n)` = `n` bps.
     #[codama(type = option(number(u16, le), fixed))]
     pub max_drift_bps: PodOption<U16>,
 }
@@ -231,8 +232,9 @@ pub struct UpdateVaultArgs {
     #[codama(type = option(number(u64, le), fixed))]
     pub sink_max_staleness_seconds: PodOption<U64>,
     /// Vault-wide ceiling on aggregate first sink marks, in bps of validated
-    /// AUM; `0` = the global default. Not the walk rate — later marks are held
-    /// to `MAX_DRIFT_BPS` per window.
+    /// AUM; `0` selects the global default, `u16::MAX` waives the ceiling,
+    /// and `None` leaves it unchanged. Later marks are held to `MAX_DRIFT_BPS`
+    /// per window.
     #[codama(type = option(number(u16, le), fixed))]
     pub sink_bootstrap_cap_bps: PodOption<U16>,
     /// How many sink slots may be claimed, up to `MAX_SINKS`. `Some(0)` stops
