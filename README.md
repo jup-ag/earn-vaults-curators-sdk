@@ -1,24 +1,24 @@
 # earn-vaults-curators-sdk
 
-Synced with earn vault program commit `1a10a73a7a97ed461af67dd38a902869fa404026`.
+Synced with earn vault program commit `5c8ac40adf0ff84f61a6db58134ff822606661a3`.
 
-`max_deployed = 0` disables new deployment; `max_deposit = 0` disables deposits,
-including queued fulfillment. For both caps, `u64::MAX` (`18446744073709551615`)
-means unlimited. Empty SDK initialization cap lists and assets added through
-the CLI default to unlimited. Explicit zero caps are preserved.
+`max_deployed = 0` blocks new deployment. `max_deposit = 0` blocks deposits,
+including queued fulfillment. `u64::MAX` means unlimited and is the default for
+omitted SDK initialization caps and CLI asset additions.
 
-Account and instruction layouts are unchanged, and existing stored caps are
-not rewritten. Before upgrading the program, set existing zero deployment caps
-to a finite cap or `u64::MAX` where deployment should remain enabled, and do the
-same for zero deposit caps where deposits should remain enabled. Pending
-subscriptions use the cap at fulfillment and can still be cancelled. Recalls
-and repayments retain their existing checks. Before rolling back to a program
-that treats zero deposit caps as unlimited, disable the deposit flag on assets
-whose zero cap must continue blocking deposits.
+Drift and sink-bootstrap budgets use `u16::MAX` to waive the limit. At
+initialization or position addition, `None` or `0` uses the global default.
+When updating an existing field, `None` leaves it unchanged.
 
-Drift and sink-bootstrap budget inputs use `u16::MAX` (`65535`) to waive the
-budget; `None` or `0` selects the global default at initialization and when
-adding positions. For updates to existing fields, `None` leaves the value
-unchanged. Stored budgets are unchanged. Coordinate these client inputs with
-the program upgrade or rollback: older initialization and position-add
-instructions reject `65535` and interpret explicit zero as a waiver.
+Older programs interpret zero caps and budgets differently. Before upgrading,
+replace stored zero caps where deployment or deposits should stay enabled.
+Before rolling back, disable the deposit flag where a zero cap must keep
+blocking deposits. Older initialization and position-add instructions reject
+`u16::MAX` budgets and treat zero as a waiver.
+
+Offerbook yield uses `ProtocolCpi` with the generated `offerbook-client`
+instructions. `state::permissions::offerbook::YIELD` (`1 << 6`) permits enable
+and supply; `ESCROW` permits disable and recall. These routes require the
+program upgrade. Disable yield and recall all shares before rolling back.
+See the [escrow-yield guide](https://github.com/jup-ag/earn-vaults-programs/blob/5c8ac40adf0ff84f61a6db58134ff822606661a3/docs/OFFERBOOK_ESCROW_YIELD.md)
+for accounts, pricing and operator requirements.

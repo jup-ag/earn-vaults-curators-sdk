@@ -15,6 +15,9 @@ pub mod offerbook {
     /// Cancel offers. Creating a standing collateral offer is refused (H-03):
     /// its fill never passes through the vault, so it cannot be priced.
     pub const COLLATERAL_OFFER: u64 = 1 << 5;
+    /// Opt into Offerbook escrow yield and compound escrow USDC. Disabling
+    /// yield and redeeming shares back to escrow require [`ESCROW`].
+    pub const YIELD: u64 = 1 << 6;
 }
 
 pub mod jupiter {
