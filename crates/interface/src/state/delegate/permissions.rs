@@ -3,7 +3,7 @@ pub mod offerbook {
     /// escrow. Withdrawing an unlisted mint also requires [`CLAIM`].
     pub const ESCROW: u64 = 1 << 0;
     /// Create a principal (lender-side) offer within curator loan limits, and
-    /// cancel any offer.
+    /// cancel any offer or disable future renewals of an existing loan.
     pub const OFFER: u64 = 1 << 1;
     /// Claim a filled loan's repayment/default collateral; paired with
     /// [`ESCROW`] to withdraw unlisted seized collateral into custody.
@@ -18,6 +18,11 @@ pub mod offerbook {
     /// Opt into Offerbook escrow yield and compound escrow USDC. Disabling
     /// yield and redeeming shares back to escrow require [`ESCROW`].
     pub const YIELD: u64 = 1 << 6;
+    /// Enable or disable borrower renewals on an existing loan as lender, and
+    /// create principal offers with `allow_extend` set.
+    /// Consent persists until disabled on the loan, even after this grant is
+    /// revoked. Duration limits bound each period, not the total loan lifetime.
+    pub const RENEW: u64 = 1 << 7;
 }
 
 pub mod jupiter {
