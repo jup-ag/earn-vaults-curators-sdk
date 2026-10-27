@@ -277,7 +277,7 @@ impl Vault {
         let capacity = (self.sink_capacity as usize).min(MAX_SINKS);
         let i = self.sinks[..capacity]
             .iter()
-            .position(|s| s.is_free())
+            .position(SinkSlot::is_free)
             .ok_or(VaultError::SinkCapacityExhausted)?;
         self.sinks[i].mint = *mint;
         Ok(&mut self.sinks[i])

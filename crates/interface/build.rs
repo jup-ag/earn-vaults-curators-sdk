@@ -9,7 +9,7 @@ fn main() {
     println!("cargo:rerun-if-changed=src/");
 
     if let Err(e) = generate_idl() {
-        println!("cargo:warning=Failed to generate IDL: {}", e)
+        println!("cargo:warning=Failed to generate IDL: {e}")
     }
 }
 

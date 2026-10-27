@@ -47,14 +47,14 @@ pub fn load_kp(path: &Path) -> Result<Keypair> {
 // --- raw JSON-RPC over ureq --------------------------------------------------
 
 pub fn rpc(url: &str, method: &str, params: Value) -> Result<Value> {
-    let resp: Value = ureq::post(url)
+    let mut resp: Value = ureq::post(url)
         .send_json(json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}))?
         .body_mut()
         .read_json()?;
     if let Some(e) = resp.get("error") {
         bail!("rpc {method} error: {e}");
     }
-    Ok(resp["result"].clone())
+    Ok(resp.get_mut("result").map_or(Value::Null, Value::take))
 }
 
 pub fn latest_blockhash(url: &str) -> Result<Hash> {
@@ -451,8 +451,7 @@ pub fn fetch_snapshot(url: &str, vault: Address, user: Option<Address>) -> Resul
     // display-grade accuracy).
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_secs() as i64);
     let streaming_fee_accrued = vs.accrued_fee_assets(now);
     let perf_fee_accrued = vs
         .raw_fee_liability(share_supply, now)

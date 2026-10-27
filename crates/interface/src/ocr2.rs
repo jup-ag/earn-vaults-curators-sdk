@@ -60,10 +60,11 @@ pub fn read(owner: &Address, data: &[u8]) -> Result<Reading, ProgramError> {
     if owner != &CHAINLINK_OCR2_STORE_ID {
         return Err(ProgramError::InvalidAccountOwner);
     }
-    let invalid = ProgramError::InvalidAccountData;
-    let header: TransmissionsHeader =
-        wincode::deserialize_exact(data.get(..ENTRIES).ok_or(invalid.clone())?)
-            .map_err(|_| invalid.clone())?;
+    let header: TransmissionsHeader = wincode::deserialize_exact(
+        data.get(..ENTRIES)
+            .ok_or(ProgramError::InvalidAccountData)?,
+    )
+    .map_err(|_| ProgramError::InvalidAccountData)?;
     let entries = &data[ENTRIES..];
     if header.discriminator != DISCRIMINATOR
         || header.version != 2
@@ -71,22 +72,22 @@ pub fn read(owner: &Address, data: &[u8]) -> Result<Reading, ProgramError> {
         || header.decimals > MAX_ORACLE_REPORT_DECIMALS
         || !entries.len().is_multiple_of(ENTRY_SIZE)
     {
-        return Err(invalid);
+        return Err(ProgramError::InvalidAccountData);
     }
     let len = header.live_length as usize;
     let cursor = header.live_cursor as usize;
     if header.latest_round_id == 0 || len == 0 || cursor >= len || len > entries.len() / ENTRY_SIZE
     {
-        return Err(invalid);
+        return Err(ProgramError::InvalidAccountData);
     }
     // Avoid cursor + len overflow, including on the narrow usize targets.
     let index = if cursor == 0 { len - 1 } else { cursor - 1 };
     let entry: Transmission =
         wincode::deserialize_exact(&entries[index * ENTRY_SIZE..(index + 1) * ENTRY_SIZE])
-            .map_err(|_| invalid.clone())?;
+            .map_err(|_| ProgramError::InvalidAccountData)?;
     let price = i64::try_from(entry.answer).map_err(|_| ProgramError::InvalidAccountData)?;
     if price <= 0 || entry.timestamp == 0 {
-        return Err(invalid);
+        return Err(ProgramError::InvalidAccountData);
     }
     Ok(Reading {
         price,

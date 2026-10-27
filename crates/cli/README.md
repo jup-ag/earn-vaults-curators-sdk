@@ -28,6 +28,20 @@ earn-vaults --rpc RPC_URL sweep-idle \
 
 This command uses the supplied vault address without reading a state file.
 
+To mark an Earn-only position using a delegate's Jupiter Earn PRICE grant:
+
+```sh
+earn-vaults --rpc RPC_URL --state vault-state.json price-opaque \
+  --delegate DELEGATE_KEYPAIR --earn --slot POSITION_INDEX --value RAW_BASE_VALUE
+```
+
+Grant PRICE (`16`) on the Jupiter Earn program
+(`jup3YeL8QhtSx1e253b2FDvsMNC87fDrgQZivbrndc9`); add EARN (`8`) if the same
+delegate also deposits or withdraws. The slot must be enabled, non-debt, and
+lender-only. Omitting `--earn` selects the vault-internal PRICE grant (`1`).
+Scoped pricing requires the upgraded program; see the
+[compatibility notes](../../docs/compatibility.md).
+
 Amounts are raw integers: USD values use 6 decimals, token balances use the
 asset's `decimals`, and NAV/HWM use the interface's `NAV_SCALE` fixed point.
 Timestamps are Unix seconds; `last_priced_at` records the last on-chain pricing,
