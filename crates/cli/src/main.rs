@@ -205,12 +205,16 @@ enum Cmd {
     /// PriceOpaque: a PRICE delegate posts a position's base-denominated value
     /// into `Vault.positions[slot]` (the net Fluid mark for a loop). Must be
     /// re-posted within the position's `max_staleness_seconds` or `validate-aum`
-    /// halts. Grant the signer `self` with the PRICE bit (1) first. A
+    /// halts. Grant the signer `self` with the PRICE bit (1), or use `--earn`
+    /// with the Jupiter Earn program's PRICE bit (16). A
     /// never-priced slot's first mark is capped at one drift window (2%) of the
     /// last validated AUM; larger positions are walked up window by window.
     PriceOpaque {
         #[arg(long)]
         delegate: PathBuf,
+        /// Use the Jupiter Earn grant; only an Earn-only position may be marked.
+        #[arg(long)]
+        earn: bool,
         /// Index into Vault.positions.
         #[arg(long)]
         slot: u8,
@@ -928,15 +932,14 @@ fn parse_nest_route(spec: &str) -> Result<NestRoute> {
         return Ok(NestRoute::zero());
     }
     let mut fields = spec.split(':');
-    let (composer, relayer, oft_store, share_mint) = match (
+    let (Some(composer), Some(relayer), Some(oft_store), Some(share_mint), None) = (
         fields.next(),
         fields.next(),
         fields.next(),
         fields.next(),
         fields.next(),
-    ) {
-        (Some(a), Some(b), Some(c), Some(d), None) => (a, b, c, d),
-        _ => bail!("want COMPOSER:RELAYER:OFT_STORE:SHARE_MINT or disabled"),
+    ) else {
+        bail!("want COMPOSER:RELAYER:OFT_STORE:SHARE_MINT or disabled");
     };
     let evm = |s: &str| -> Result<[u8; 20]> {
         let hex = s.strip_prefix("0x").unwrap_or(s);
@@ -1364,6 +1367,7 @@ fn run_set_collateral_policy(ctx: CommandContext<'_>, command: Cmd) -> Result<()
 fn run_price_opaque(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
     let Cmd::PriceOpaque {
         delegate,
+        earn,
         slot,
         value,
     } = command
@@ -1379,8 +1383,12 @@ fn run_price_opaque(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
         vault: addr(&st.vault)?,
         slot,
         value,
-    }
-    .into_instruction();
+    };
+    let ix = if earn {
+        ix.into_earn_instruction()
+    } else {
+        ix.into_instruction()
+    };
     println!(
         "priced slot {slot} = {value} ({})",
         send_opts(url, &[ix], &[&delegate_kp], &[], false)?
@@ -2198,6 +2206,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn price_opaque_earn_grant_is_opt_in() {
+        for earn in [false, true] {
+            let mut args = vec![
+                "earn-vaults",
+                "price-opaque",
+                "--delegate",
+                "delegate.json",
+                "--slot",
+                "3",
+                "--value",
+                "42",
+            ];
+            if earn {
+                args.push("--earn");
+            }
+            let cli = Cli::try_parse_from(args).unwrap();
+            assert!(matches!(
+                cli.cmd,
+                Cmd::PriceOpaque { earn: parsed, slot: 3, value: 42, .. } if parsed == earn
+            ));
+        }
+    }
+
+    #[test]
     fn sweep_idle_cli_requires_vault_mint_and_destination() {
         let vault = Address::new_from_array([3; 32]);
         let mint = Address::new_from_array([1; 32]);
@@ -2394,7 +2426,7 @@ mod tests {
             .oracles()
             .unwrap()
             .iter()
-            .map(|a| a.to_string())
+            .map(ToString::to_string)
             .collect();
         assert_eq!(oracles, [base, other, added, quote]);
     }

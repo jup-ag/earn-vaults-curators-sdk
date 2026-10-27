@@ -39,6 +39,10 @@ pub mod jupiter_lend {
     pub const BORROW: u64 = 1 << 1;
     /// Deposit into and withdraw from a Jupiter Earn vault.
     pub const EARN: u64 = 1 << 3;
+    /// Mark the vault's enabled, non-debt, Earn-only (`lender_only`)
+    /// `Protocol::JupiterLend` position via `price_opaque`. Only honored on a
+    /// grant whose `protocol_id` is `JupiterEarn::PROGRAM_ID`.
+    pub const PRICE: u64 = 1 << 4;
 }
 
 pub mod ccip {
@@ -60,7 +64,8 @@ pub mod nest {
 
 pub mod vault {
     /// Post a mark for an opaque position slot, or a price for a hand-priced
-    /// asset row (`price_opaque`, `ASSET_TARGET`) — both drift-guarded.
+    /// asset row (`price_opaque`, `ASSET_TARGET`), or a sink — drift-guarded.
+    /// For an Earn-only position, prefer the scoped [`super::jupiter_lend::PRICE`].
     pub const PRICE: u64 = 1 << 0;
     /// Fulfill pending subscribe and redeem requests.
     pub const FULFILL: u64 = 1 << 1;

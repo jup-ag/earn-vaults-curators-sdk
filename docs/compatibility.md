@@ -1,6 +1,17 @@
 # Compatibility notes
 
-Synced with earn vault program commit `4157cb50e6ce7de661991e2fcb314123747cb855`.
+Synced with earn vault program commit `4e77519fb667f1b4921d9d5f621ef24f3eb5fff4`.
+
+`state::permissions::jupiter_lend::PRICE` (`1 << 4`) permits pricing an enabled,
+non-debt, lender-only `Protocol::JupiterLend` position when granted on the
+Jupiter Earn program (`jup3YeL8QhtSx1e253b2FDvsMNC87fDrgQZivbrndc9`). Use
+`PriceOpaque::into_earn_instruction()` or CLI `price-opaque --earn` to select
+that grant. It cannot price other positions, asset rows, or sinks; granting the
+bit on Fluid Vaults gives no pricing authority. Drift/bootstrap, Strategy pause,
+and flash-liability guards still apply. Existing `into_instruction()` calls
+continue to use the vault-internal PRICE grant. Scoped pricing requires the
+program upgrade; older programs reject the Earn grant. Review wildcard Earn
+permission masks, which now include PRICE.
 
 `max_deployed = 0` blocks new deployment. `max_deposit = 0` blocks deposits,
 including queued fulfillment. `u64::MAX` means unlimited and is the default for
@@ -20,7 +31,7 @@ Offerbook yield uses `ProtocolCpi` with the generated `offerbook-client`
 instructions. `state::permissions::offerbook::YIELD` (`1 << 6`) permits enable
 and supply; `ESCROW` permits disable and recall. These routes require the
 program upgrade. Disable yield and recall all shares before rolling back.
-See the [escrow-yield guide](https://github.com/jup-ag/earn-vaults-programs/blob/4157cb50e6ce7de661991e2fcb314123747cb855/docs/OFFERBOOK_ESCROW_YIELD.md)
+See the [escrow-yield guide](https://github.com/jup-ag/earn-vaults-programs/blob/4e77519fb667f1b4921d9d5f621ef24f3eb5fff4/docs/OFFERBOOK_ESCROW_YIELD.md)
 for accounts, pricing and operator requirements.
 
 Offerbook principal offers support partial fills through the existing generated

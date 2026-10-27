@@ -7,9 +7,9 @@ use {
     solana_instruction::{AccountMeta, Instruction},
 };
 
-/// `price_opaque` — delegate-only (`permissions::vault::PRICE`). Posts
-/// `(slot, value)` into `Vault.positions[slot]` with a mandatory drift
-/// guard (`|value − prior| / prior ≤ MAX_DRIFT_BPS`; first write bootstraps).
+/// `price_opaque` — a curator or `permissions::vault::PRICE` delegate posts
+/// `(slot, value)` into `Vault.positions[slot]`. Delegate marks obey the
+/// configured drift/bootstrap guard; curator non-debt marks are outright.
 ///
 /// With `ASSET_TARGET` set on `slot` the same call writes
 /// `Vault.assets[idx].last_price` instead — the hand-priced-row path, drift-
@@ -19,8 +19,9 @@ use {
 /// The gating delegate is the vault-internal one, keyed on
 /// `protocol_id == vault_program_id` — the same PDA `GrantRevokeDelegate`
 /// creates when granted with `protocol_id: <vault program id>`.
+/// Use [`Self::into_earn_instruction`] for a scoped Jupiter Earn PRICE grant.
 pub struct PriceOpaque {
-    /// Delegate keypair; signs the tx and must hold the `PRICE` bit.
+    /// Curator or delegate keypair; a delegate must hold the `PRICE` bit.
     pub signer: Address,
     pub vault: Address,
     /// Index into `Vault.positions` — or
@@ -35,8 +36,20 @@ pub struct PriceOpaque {
 
 impl PriceOpaque {
     pub fn into_instruction(self) -> Instruction {
-        // protocol_id == vault program id for vault-internal permissions.
-        let delegate = derive_protocol_delegate(&self.vault, &self.signer, &crate::ID);
+        self.into_instruction_for(&crate::ID)
+    }
+
+    /// Use `permissions::jupiter_lend::PRICE` on the Jupiter Earn program.
+    /// Only an enabled, non-debt, lender-only JupiterLend position is allowed;
+    /// the same delegate drift, bootstrap, pause, and flash guards apply.
+    pub fn into_earn_instruction(self) -> Instruction {
+        const JUPITER_EARN_PROGRAM_ID: Address =
+            Address::from_str_const("jup3YeL8QhtSx1e253b2FDvsMNC87fDrgQZivbrndc9");
+        self.into_instruction_for(&JUPITER_EARN_PROGRAM_ID)
+    }
+
+    fn into_instruction_for(self, protocol_id: &Address) -> Instruction {
+        let delegate = derive_protocol_delegate(&self.vault, &self.signer, protocol_id);
 
         let args = PriceOpaqueArgs {
             slot_idx: self.slot,
@@ -55,5 +68,25 @@ impl PriceOpaque {
             ],
             data,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn earn_instruction_only_changes_delegate_pda() {
+        let build = || PriceOpaque {
+            signer: Address::new_from_array([1; 32]),
+            vault: Address::new_from_array([2; 32]),
+            slot: 3,
+            value: 42,
+        };
+        let mut expected = build().into_instruction();
+        let earn = Address::from_str_const("jup3YeL8QhtSx1e253b2FDvsMNC87fDrgQZivbrndc9");
+        expected.accounts[1].pubkey =
+            derive_protocol_delegate(&build().vault, &build().signer, &earn);
+        assert_eq!(build().into_earn_instruction(), expected);
     }
 }
