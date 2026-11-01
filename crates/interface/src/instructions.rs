@@ -324,17 +324,6 @@ pub enum VaultInstruction<'de> {
     #[codama(account(name = "eventAuthority"))]
     #[codama(account(name = "program"))]
     ClaimFees,
-    #[codama(account(name = "signer", signer))]
-    #[codama(account(name = "delegate"))]
-    #[codama(account(name = "vault", writable))]
-    #[codama(account(name = "vaultAuthority"))]
-    #[codama(account(name = "shareMint"))]
-    #[codama(account(name = "vaultShareAccount", writable))]
-    #[codama(account(name = "signerShareAccount", writable))]
-    #[codama(account(name = "tokenProgram"))]
-    #[codama(account(name = "instructionsSysvar"))]
-    #[codama(account(name = "routePolicy"))]
-    PrepareNestRedeem,
 
     /// Remaining accounts are whatever the protocol's policy validation reads
     /// (Offerbook: the collateral mint). An empty payload closes the policy.
@@ -348,6 +337,17 @@ pub enum VaultInstruction<'de> {
         #[codama(size_prefix = number(u64))]
         payload: &'de [u8],
     },
+    #[codama(account(name = "signer", signer))]
+    #[codama(account(name = "delegate"))]
+    #[codama(account(name = "vault", writable))]
+    #[codama(account(name = "vaultAuthority"))]
+    #[codama(account(name = "shareMint"))]
+    #[codama(account(name = "vaultShareAccount", writable))]
+    #[codama(account(name = "signerShareAccount", writable))]
+    #[codama(account(name = "tokenProgram"))]
+    #[codama(account(name = "instructionsSysvar"))]
+    #[codama(account(name = "routePolicy"))]
+    PrepareNestRedeem,
     #[codama(skip)]
     Event = 254,
 }
@@ -433,11 +433,11 @@ unsafe impl<'de, C: Config> SchemaRead<'de, C> for VaultInstruction<'de> {
                 amount: <&U64 as SchemaRead<'de, C>>::get(reader)?,
             },
             26 => Self::ClaimFees,
-            27 => Self::PrepareNestRedeem,
-            28 => Self::SetProtocolPolicy {
+            27 => Self::SetProtocolPolicy {
                 args: <&SetProtocolPolicyArgs as SchemaRead<'de, C>>::get(reader.by_ref())?,
                 payload: <&[u8] as SchemaRead<'de, C>>::get(reader)?,
             },
+            28 => Self::PrepareNestRedeem,
             254 => Self::Event,
             tag => return Err(ReadError::InvalidTagEncoding(tag as usize)),
         };
@@ -598,6 +598,40 @@ mod tests {
     use {super::*, wincode::Deserialize};
 
     #[test]
+    fn protocol_policy_and_nest_instruction_tags() {
+        let args = SetProtocolPolicyArgs {
+            protocol: 2,
+            key: Address::new_from_array([7; 32]),
+        };
+        for payload in [&[][..], &[1, 2, 3][..]] {
+            let data = wincode::serialize(&VaultInstruction::SetProtocolPolicy {
+                args: &args,
+                payload,
+            })
+            .unwrap();
+            assert_eq!(data[0], 27);
+            let VaultInstruction::SetProtocolPolicy {
+                args: decoded,
+                payload: decoded_payload,
+            } = VaultInstruction::deserialize(&data).unwrap()
+            else {
+                panic!("tag 27 must decode as SetProtocolPolicy");
+            };
+            assert_eq!(decoded.protocol, args.protocol);
+            assert_eq!(decoded.key, args.key);
+            assert_eq!(decoded_payload, payload);
+        }
+
+        let data = wincode::serialize(&VaultInstruction::PrepareNestRedeem).unwrap();
+        assert_eq!(data, [28]);
+        assert!(matches!(
+            VaultInstruction::deserialize(&data).unwrap(),
+            VaultInstruction::PrepareNestRedeem
+        ));
+        assert!(VaultInstruction::deserialize(&[27]).is_err());
+    }
+
+    #[test]
     fn removed_migration_tag_is_rejected() {
         let args = SetProtocolPolicyArgs {
             protocol: 0,
@@ -609,7 +643,7 @@ mod tests {
         };
         let mut data = [0u8; 42];
         wincode::serialize_into(&mut data[..], &ix).unwrap();
-        assert_eq!(data[0], 28);
+        assert_eq!(data[0], 27);
         assert!(VaultInstruction::deserialize(&data).is_ok());
         data[0] = 29;
         assert!(VaultInstruction::deserialize(&data).is_err());

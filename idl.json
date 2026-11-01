@@ -3210,6 +3210,86 @@
       },
       {
         "kind": "instructionNode",
+        "name": "setProtocolPolicy",
+        "accounts": [
+          {
+            "kind": "instructionAccountNode",
+            "name": "curator",
+            "isWritable": true,
+            "isSigner": true
+          },
+          {
+            "kind": "instructionAccountNode",
+            "name": "vault",
+            "isWritable": true,
+            "isSigner": false
+          },
+          {
+            "kind": "instructionAccountNode",
+            "name": "protocolPolicy",
+            "isWritable": true,
+            "isSigner": false
+          },
+          {
+            "kind": "instructionAccountNode",
+            "name": "systemProgram",
+            "isWritable": false,
+            "isSigner": false
+          }
+        ],
+        "arguments": [
+          {
+            "kind": "instructionArgumentNode",
+            "name": "discriminator",
+            "defaultValueStrategy": "omitted",
+            "type": {
+              "kind": "numberTypeNode",
+              "format": "u8",
+              "endian": "le"
+            },
+            "defaultValue": {
+              "kind": "numberValueNode",
+              "number": 27
+            },
+            "display": {
+              "kind": "structFieldDisplayNode",
+              "skip": "always"
+            }
+          },
+          {
+            "kind": "instructionArgumentNode",
+            "name": "args",
+            "type": {
+              "kind": "definedTypeLinkNode",
+              "name": "setProtocolPolicyArgs"
+            }
+          },
+          {
+            "kind": "instructionArgumentNode",
+            "name": "payload",
+            "type": {
+              "kind": "sizePrefixTypeNode",
+              "type": {
+                "kind": "bytesTypeNode"
+              },
+              "prefix": {
+                "kind": "numberTypeNode",
+                "format": "u64",
+                "endian": "le"
+              }
+            }
+          }
+        ],
+        "discriminators": [
+          {
+            "kind": "fieldDiscriminatorNode",
+            "name": "discriminator",
+            "offset": 0
+          }
+        ]
+      },
+      {
+        "kind": "instructionNode",
         "name": "prepareNestRedeem",
         "accounts": [
           {
@@ -3285,91 +3365,11 @@
             },
             "defaultValue": {
               "kind": "numberValueNode",
-              "number": 27
-            },
-            "display": {
-              "kind": "structFieldDisplayNode",
-              "skip": "always"
-            }
-          }
-        ],
-        "discriminators": [
-          {
-            "kind": "fieldDiscriminatorNode",
-            "name": "discriminator",
-            "offset": 0
-          }
-        ]
-      },
-      {
-        "kind": "instructionNode",
-        "name": "setProtocolPolicy",
-        "accounts": [
-          {
-            "kind": "instructionAccountNode",
-            "name": "curator",
-            "isWritable": true,
-            "isSigner": true
-          },
-          {
-            "kind": "instructionAccountNode",
-            "name": "vault",
-            "isWritable": true,
-            "isSigner": false
-          },
-          {
-            "kind": "instructionAccountNode",
-            "name": "protocolPolicy",
-            "isWritable": true,
-            "isSigner": false
-          },
-          {
-            "kind": "instructionAccountNode",
-            "name": "systemProgram",
-            "isWritable": false,
-            "isSigner": false
-          }
-        ],
-        "arguments": [
-          {
-            "kind": "instructionArgumentNode",
-            "name": "discriminator",
-            "defaultValueStrategy": "omitted",
-            "type": {
-              "kind": "numberTypeNode",
-              "format": "u8",
-              "endian": "le"
-            },
-            "defaultValue": {
-              "kind": "numberValueNode",
               "number": 28
             },
             "display": {
               "kind": "structFieldDisplayNode",
               "skip": "always"
-            }
-          },
-          {
-            "kind": "instructionArgumentNode",
-            "name": "args",
-            "type": {
-              "kind": "definedTypeLinkNode",
-              "name": "setProtocolPolicyArgs"
-            }
-          },
-          {
-            "kind": "instructionArgumentNode",
-            "name": "payload",
-            "type": {
-              "kind": "sizePrefixTypeNode",
-              "type": {
-                "kind": "bytesTypeNode"
-              },
-              "prefix": {
-                "kind": "numberTypeNode",
-                "format": "u64",
-                "endian": "le"
-              }
             }
           }
         ],
