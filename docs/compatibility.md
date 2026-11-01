@@ -1,6 +1,23 @@
 # Compatibility notes
 
-Synced with earn vault program commit `4e77519fb667f1b4921d9d5f621ef24f3eb5fff4`.
+Synced with earn vault program commit `179a757e6321d1aa19cf911e7433bea98bc4ee41`.
+
+`SetProtocolPolicy` now uses instruction tag `27` (previously `28`), and
+`PrepareNestRedeem` uses `28` (previously `27`). This is a breaking instruction
+ABI change. SDK builders, CLI commands, CPI callers and IDL-based clients must
+use the mapping matching the deployed vault program. Account layouts, PDA seeds
+and stored policies are unchanged; this swap needs no account migration or
+transfer-hook upgrade.
+
+Stop submissions of these two instructions before upgrading. Rebuild clients
+and regenerate IDL-based clients and decoders. Cancel or rebuild pending multisig
+proposals and stored transactions containing the old bytes, including
+durable-nonce transactions; let ordinary in-flight transactions confirm or expire.
+Upgrade the vault program, switch clients and published IDLs together, verify
+both operations, then resume submissions. The same tag now selects the other
+handler, so do not mix versions. Historical decoders must retain the old mapping
+for transactions before the upgrade slot. Rollback requires stopping submissions
+again and restoring the previous program, clients and IDL together.
 
 `state::permissions::jupiter_lend::PRICE` (`1 << 4`) permits pricing an enabled,
 non-debt, lender-only `Protocol::JupiterLend` position when granted on the
@@ -31,7 +48,7 @@ Offerbook yield uses `ProtocolCpi` with the generated `offerbook-client`
 instructions. `state::permissions::offerbook::YIELD` (`1 << 6`) permits enable
 and supply; `ESCROW` permits disable and recall. These routes require the
 program upgrade. Disable yield and recall all shares before rolling back.
-See the [escrow-yield guide](https://github.com/jup-ag/earn-vaults-programs/blob/4e77519fb667f1b4921d9d5f621ef24f3eb5fff4/docs/OFFERBOOK_ESCROW_YIELD.md)
+See the [escrow-yield guide](https://github.com/jup-ag/earn-vaults-programs/blob/179a757e6321d1aa19cf911e7433bea98bc4ee41/docs/OFFERBOOK_ESCROW_YIELD.md)
 for accounts, pricing and operator requirements.
 
 Offerbook principal offers support partial fills through the existing generated
