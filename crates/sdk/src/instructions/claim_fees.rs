@@ -70,7 +70,8 @@ mod tests {
     fn signer_role_selects_and_binds_the_fee_pda() {
         let vault = address(2);
         let destination = address(3);
-        let curator = address(1);
+        // The former treasury must no longer select the protocol fee account.
+        let curator = Address::from_str_const("GTmMKk9qdVzAsxrnLeXSgsAjf7UbWJph7TqfYZFnA6k6");
         let curator_ix = ClaimFees {
             signer: curator,
             vault,
@@ -107,7 +108,7 @@ mod tests {
         assert_eq!(curator_ix.accounts[11].pubkey, crate::ID);
 
         let protocol_ix = ClaimFees {
-            signer: PROTOCOL_TREASURY,
+            signer: Address::from_str_const("7vYZz8z6VAMyVb8SoSBBmyd5MivbgbxJnM6nih8Ms4ix"),
             vault,
             destination,
         }

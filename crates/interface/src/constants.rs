@@ -4,6 +4,12 @@ use {
     zeropod::{I64, U64},
 };
 
+pub const UPGRADEABLE_LOADER_ID: Address =
+    Address::from_str_const("BPFLoaderUpgradeab1e11111111111111111111111");
+/// Canonical loader-v3 account storing this program's current upgrade authority.
+pub const PROGRAM_DATA_PDA: (Address, u8) =
+    find_program_address_const(&[crate::ID.as_array()], &UPGRADEABLE_LOADER_ID);
+
 pub const SEED_EVENT_AUTHORITY: &[u8] = b"__event_authority";
 
 pub const EVENT_PDA: (Address, u8) =
@@ -37,9 +43,9 @@ const _: () =
     assert!(MAX_PERFORMANCE_FEE_BPS as u32 + PROTOCOL_PERFORMANCE_FEE_BPS as u32 <= 10_000);
 
 /// Authorized claimant for the protocol's crystallized-fee share PDA.
-/// ⚠️ Dev placeholder — replace with the treasury multisig before deployment.
+/// Mainnet Squads vault (index 0); rollout details are in docs/compatibility.md.
 pub const PROTOCOL_TREASURY: Address =
-    Address::from_str_const("GTmMKk9qdVzAsxrnLeXSgsAjf7UbWJph7TqfYZFnA6k6");
+    Address::from_str_const("7vYZz8z6VAMyVb8SoSBBmyd5MivbgbxJnM6nih8Ms4ix");
 
 /// Default freshness window for validated AUM, position marks and sink marks.
 /// Their respective curator-set windows override this default independently.

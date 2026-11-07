@@ -1,8 +1,40 @@
 # Compatibility notes
 
-Synced with earn vault program commit `7c5064685d42b9f7c178bb74ba6f7b6f0dddf300`.
+Synced with earn vault program commit `3ea4f47386be83e3fe06e3b1210d507f965121bc`.
 
-This update breaks the vault account layout, initialization/update arguments,
+## Upgrade-authority pause and treasury (`3ea4f47`)
+
+The current program upgrade authority can add per-vault pause flags without a
+delegate grant. Use `SetPaused::into_upgrade_authority_instruction()` or the
+offline CLI `export-pause --authority SQUADS_VAULT_PDA --vault VAULT_ADDRESS`.
+The builder replaces the delegate meta with the readonly canonical
+`PROGRAM_DATA_PDA`; the signer must be the upgrade authority at execution time.
+The interface exports the loader ID, ProgramData PDA and `program_data::upgrade_authority`
+header decoder. Callers of the decoder must separately bind the account address
+to the expected program.
+
+The existing `SetPaused::into_instruction()` delegate path is unchanged.
+Instruction tags, payloads and vault layouts are unchanged from `7c50646`;
+existing vaults on that version need no account migration for this update.
+Only the curator can clear pause flags through `UpdateVault`. Claims and
+cancellations remain available; share-transfer pauses remain curator-only.
+See the [emergency pause runbook](emergency-pause.md).
+
+`PROTOCOL_TREASURY` changes from the development wallet to the Squads vault
+`7vYZz8z6VAMyVb8SoSBBmyd5MivbgbxJnM6nih8Ms4ix`. `ClaimFees` now selects the
+protocol fee PDA for that signer; its destination share account must be owned by
+that PDA. Rebuild and deploy the vault program and transfer hook together and
+update clients. The constant does not transfer program upgrade authority.
+Upstream records bootstrap 1-of-1 treasury governance at this commit; its stated
+production target is 3-of-5. Verify live governance before production use.
+
+The new emergency path requires the matching program upgrade. Before rollback,
+stop submissions and restore matching program, hook and clients together;
+rebuild fee-claim transactions and revalidate pending multisig proposals.
+
+## Previous layout upgrade (`7c50646`)
+
+The `7c50646` update breaks the vault account layout, initialization/update arguments,
 event layouts and `PriceOpaque` instruction ABI.
 Deploy matching program, SDK and regenerated IDL clients together. Instruction
 tags remain unchanged from `179a757`.

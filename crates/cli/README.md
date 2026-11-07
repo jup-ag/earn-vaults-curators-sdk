@@ -16,6 +16,17 @@ and fees. It reads directly from the vault address, without a state file or
 keypair. Add `--user <pubkey>` to include that investor's shares and redeem value.
 Use `--rpc <url>` or `SOLANA_RPC_URL` to select the cluster (default: mainnet).
 
+To export an unsigned emergency pause instruction for the upgrade multisig:
+
+```sh
+earn-vaults export-pause --authority SQUADS_VAULT_PDA --vault VAULT_ADDRESS
+```
+
+This prints JSON without RPC, state-file or keypair access. `--flags` defaults
+to `7` (all three pause bits) and accepts `0..=7`. See the
+[emergency pause runbook](../../docs/emergency-pause.md) for authorization,
+proposal execution and recovery.
+
 To sweep residual custody during teardown, once share supply and pending
 redeems are both zero, run the curator-signed command for each listed asset or
 written-off sink. The destination must be an existing token account for the mint:
