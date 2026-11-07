@@ -126,6 +126,9 @@ pub struct InitializeVaultArgs {
     pub metadata_symbol: PodString<5>,
     #[codama(type = struct(field("len", number(u8)), field("value", fixed_size(string, 200))))]
     pub metadata_uri: PodString<200>,
+    /// Curator fee on settled queued shares; 0 disables, capped at 1,000 bps.
+    #[codama(type = number(u16))]
+    pub queued_redeem_fee_bps: U16,
 }
 
 impl ZcValidate for InitializeVaultArgs {

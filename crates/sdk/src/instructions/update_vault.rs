@@ -31,6 +31,9 @@ use {
 /// - `position_update`: rewrite part of a position's risk parameters.
 /// - `max_flash_liability`: transient liability cap; `0` disables it.
 /// - `sink_*`: seized-collateral capacity, pricing, and release controls.
+///
+/// Fee updates append the readonly share mint after any asset accounts so the
+/// program can check pending performance against the live supply.
 #[derive(Default)]
 pub struct UpdateVault {
     pub curator: Address,
@@ -44,6 +47,8 @@ pub struct UpdateVault {
     /// `management_fee_bps`. The global protocol rate is additive.
     pub performance_fee_bps: Option<u16>,
     pub instant_redeem_fee_bps: Option<u16>,
+    /// Fee on queued shares at settlement, 0..=1,000 bps; Some(0) disables it.
+    pub queued_redeem_fee_bps: Option<u16>,
     pub asset_update: Option<AssetUpdateFields>,
     pub position_update: Option<PositionUpdateFields>,
     /// Transient liability cap in numéraire micro-units.
@@ -92,8 +97,7 @@ pub struct RemoveAssetFields {
 }
 
 /// New asset row: `mint` rides as the instruction's trailing account; a zero
-/// `oracle` makes the row hand-priced (and then it may not be
-/// deposit-enabled).
+/// `oracle` makes the row hand-priced; the curator must seed its first price.
 pub struct AssetAddFields {
     pub mint: Address,
     pub oracle: Address,
@@ -120,7 +124,7 @@ pub struct AssetUpdateFields {
     pub oracle: Option<Address>,
     pub chainlink: Option<bool>,
     /// New declared scale for the row's feed; `Some(0)` hands it back to the
-    /// source. Retires the cached reading, as a rotation does.
+    /// source. A changed scale retires the cached reading.
     pub report_decimals: Option<u8>,
     /// Valuation and settlement age, 0..=u32::MAX; zero selects the 15s default.
     pub max_staleness_seconds: Option<i64>,
@@ -138,15 +142,16 @@ pub struct AssetUpdateFields {
     pub deployed: Option<u64>,
     /// Deposit capacity ceiling; `0` disables deposits, `u64::MAX` is unlimited.
     pub max_deposit: Option<u64>,
-    /// Toggle deposits for this asset; a hand-priced row may not be
-    /// deposit-enabled. The lowest-index enabled row is canonical for instant
-    /// settlement; later rows are queued-only.
+    /// Toggle deposits for this asset. The lowest-index enabled row is canonical
+    /// for direct deposits; later rows are queued-only. Manual pricing requires
+    /// instant redemption to remain disabled.
     pub deposit_enabled: Option<bool>,
     /// Quote leg feed id: the row's price becomes `oracle` × this feed.
-    /// `Some(Address::default())` makes it single-feed again. Retires the
-    /// cached reading.
+    /// `Some(Address::default())` makes it single-feed again. Resets its scale
+    /// unless `quote_report_decimals` is also supplied; retires the cache only
+    /// if the effective config changes.
     pub quote_oracle: Option<Address>,
-    /// Declared scale for the quote leg; retires the cached reading.
+    /// Declared scale for the quote leg; a changed scale retires the cache.
     pub quote_report_decimals: Option<u8>,
 }
 
@@ -227,6 +232,7 @@ impl UpdateVault {
             management_fee_bps: pod_opt(self.management_fee_bps),
             performance_fee_bps: pod_opt(self.performance_fee_bps),
             instant_redeem_fee_bps: pod_opt(self.instant_redeem_fee_bps),
+            queued_redeem_fee_bps: pod_opt(self.queued_redeem_fee_bps),
             asset: self
                 .asset_update
                 .as_ref()
@@ -276,6 +282,12 @@ impl UpdateVault {
         if let Some(r) = &self.remove_asset {
             accounts.push(AccountMeta::new_readonly(r.custody, false));
         }
+        if self.management_fee_bps.is_some() || self.performance_fee_bps.is_some() {
+            accounts.push(AccountMeta::new_readonly(
+                crate::pda::derive_share_mint(&self.vault),
+                false,
+            ));
+        }
         accounts
     }
 
@@ -311,6 +323,7 @@ mod tests {
             management_fee_bps: Some(100),
             performance_fee_bps: Some(200),
             instant_redeem_fee_bps: Some(u16::MAX),
+            queued_redeem_fee_bps: Some(75),
             asset_update: Some(AssetUpdateFields {
                 index: 2,
                 oracle: Some(address(4)),
@@ -365,6 +378,7 @@ mod tests {
         let add_asset = args.add_asset.get().unwrap();
 
         assert_eq!(args.max_aum_staleness_seconds.get().unwrap().get(), 900);
+        assert_eq!(args.queued_redeem_fee_bps.get().unwrap().get(), 75);
         assert_eq!(args.paused.get(), Some(4));
         assert_eq!(args.timelock_delay.get().map(|value| value.get()), Some(0));
         assert_eq!(asset.index, 2);
@@ -398,10 +412,48 @@ mod tests {
         let update = fixture();
         let accounts = update.accounts();
 
-        assert_eq!(accounts.len(), 6);
+        assert_eq!(accounts.len(), 7);
         assert_eq!(accounts[4].pubkey, address(5));
         assert_eq!(accounts[5].pubkey, address(7));
+        assert_eq!(
+            accounts[6].pubkey,
+            crate::pda::derive_share_mint(&update.vault)
+        );
         assert!(!accounts[4].is_writable);
         assert!(!accounts[5].is_writable);
+        assert!(!accounts[6].is_writable);
+        assert!(!accounts[6].is_signer);
+    }
+
+    #[test]
+    fn queued_fee_update_preserves_omitted_disabled_and_enabled_values() {
+        for fee in [None, Some(0), Some(1_000)] {
+            let update = UpdateVault {
+                queued_redeem_fee_bps: fee,
+                ..Default::default()
+            };
+            let args = update.arguments();
+            assert_eq!(args.queued_redeem_fee_bps.get().map(|v| v.get()), fee);
+            assert_eq!(update.accounts().len(), 4);
+        }
+    }
+
+    #[test]
+    fn only_fee_updates_append_the_share_mint() {
+        for (management, performance, expected_len) in [
+            (None, None, 4),
+            (Some(0), None, 5),
+            (None, Some(0), 5),
+            (Some(0), Some(0), 5),
+        ] {
+            let accounts = UpdateVault {
+                vault: address(2),
+                management_fee_bps: management,
+                performance_fee_bps: performance,
+                ..Default::default()
+            }
+            .accounts();
+            assert_eq!(accounts.len(), expected_len);
+        }
     }
 }

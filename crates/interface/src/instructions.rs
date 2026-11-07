@@ -27,6 +27,8 @@ pub enum VaultInstruction<'de> {
     #[codama(account(name = "program"))]
     #[codama(account(name = "policy", writable))]
     InitializeVault { args: &'de InitializeVaultArgs },
+    /// Trailing accounts: added asset mint, removed asset custody, then the
+    /// readonly share mint when changing management or performance fees.
     #[codama(account(name = "curator", signer))]
     #[codama(account(name = "vault", writable))]
     #[codama(account(name = "eventAuthority"))]
@@ -154,7 +156,7 @@ pub enum VaultInstruction<'de> {
     #[codama(account(name = "authority", signer, writable))]
     #[codama(account(name = "delegate"))]
     #[codama(account(name = "vault", writable))]
-    #[codama(account(name = "shareMint"))]
+    #[codama(account(name = "shareMint", writable))]
     #[codama(account(name = "baseMint"))]
     #[codama(account(name = "escrow", writable))]
     #[codama(account(name = "escrowTokenAccount", writable))]
@@ -164,6 +166,8 @@ pub enum VaultInstruction<'de> {
     #[codama(account(name = "tokenProgram"))]
     #[codama(account(name = "eventAuthority"))]
     #[codama(account(name = "program"))]
+    #[codama(account(name = "curatorFeeAccount", writable))]
+    #[codama(account(name = "token2022"))]
     FulfillRedeem,
     #[codama(account(name = "user", signer, writable))]
     #[codama(account(name = "vault"))]
@@ -190,6 +194,7 @@ pub enum VaultInstruction<'de> {
     #[codama(account(name = "vault", writable))]
     #[codama(account(name = "eventAuthority"))]
     #[codama(account(name = "program"))]
+    /// Sink targets additionally require the canonical custody ATA after `program`.
     PriceOpaque { args: &'de PriceOpaqueArgs },
     #[codama(account(name = "user", signer, writable))]
     #[codama(account(name = "userTokenAccount", writable))]

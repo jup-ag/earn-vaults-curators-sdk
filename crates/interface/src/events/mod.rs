@@ -92,7 +92,7 @@ mod tests {
         // fixed wire representation without extending the value's lifetime.
         let bytes = unsafe {
             core::slice::from_raw_parts(
-                (&event as *const Event<FeeAccrued>).cast::<u8>(),
+                (&raw const event).cast::<u8>(),
                 core::mem::size_of_val(&event),
             )
         };

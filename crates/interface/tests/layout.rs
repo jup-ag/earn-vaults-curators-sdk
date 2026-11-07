@@ -6,29 +6,50 @@ use {
         state::{Account, Delegate, Escrow, Vault},
         zeropod::U64,
     },
+    solana_address::Address,
     wincode::Deserialize,
 };
 
 #[test]
-fn unaligned_accounts_preserve_main_layout() {
-    assert_eq!(Vault::LEN, 2184);
+fn unaligned_accounts_preserve_pinned_field_offsets() {
+    assert_eq!(Vault::LEN, 2318);
     assert_eq!(Delegate::LEN, 106);
     assert_eq!(Escrow::LEN, 150);
     assert_eq!(core::mem::align_of::<Vault>(), 1);
     #[repr(align(16))]
-    struct Buffer([u8; 2185]);
-    let mut bytes = Buffer([0; 2185]);
+    struct Buffer([u8; 2319]);
+    let mut bytes = Buffer([0; 2319]);
     bytes.0[1] = Vault::DISCRIMINATOR;
     let vault = Vault::read_mut(&mut bytes.0[1..]).unwrap();
     vault.aum = U64::new(123);
     vault.assets[7].deployed = U64::new(u64::MAX);
+    for (i, sink) in vault.sinks.iter_mut().enumerate() {
+        sink.balance = U64::new(456 + i as u64);
+    }
+    vault.nest_receipt_mint = Address::new_from_array([7; 32]);
+    vault.queued_redeem_fee_bps = 200u16.into();
     assert_eq!(&bytes.0[2 + 136..2 + 144], &123u64.to_le_bytes());
     let offset = 2 + 256 + 7 * 179 + 74;
     assert_eq!(&bytes.0[offset..offset + 8], &u64::MAX.to_le_bytes());
+    for i in 0..4 {
+        let offset = 2 + 1912 + i * 57 + 40;
+        assert_eq!(
+            &bytes.0[offset..offset + 8],
+            &(456 + i as u64).to_le_bytes()
+        );
+    }
+    assert_eq!(&bytes.0[2 + 2155..2 + 2187], &[7; 32]);
+    assert_eq!(&bytes.0[2 + 2187..2 + 2189], &200u16.to_le_bytes());
+    assert_eq!(&bytes.0[2 + 2189..], &[0; 128]);
     let vault = Vault::read(&bytes.0[1..]).unwrap();
     assert_eq!(vault.aum.get(), 123);
     assert_eq!(wincode::serialize(vault).unwrap(), bytes.0[2..]);
-    assert!(Vault::read(&bytes.0[1..2184]).is_err());
+    assert!(Vault::read(&bytes.0[1..2318]).is_err());
+    assert!(Vault::read(&bytes.0[1..2317]).is_err());
+    assert!(Vault::read(&bytes.0[1..2189]).is_err());
+    // The old account size must fail closed until the separate migration lands.
+    assert!(Vault::read(&bytes.0[1..2185]).is_err());
+    assert!(Vault::read_mut(&mut bytes.0[1..2185]).is_err());
     assert!(Vault::read(&bytes.0).is_err());
     bytes.0[1] = 0;
     assert!(Vault::read(&bytes.0[1..]).is_err());
@@ -94,6 +115,7 @@ fn borrowed_instructions_validate_active_fixed_fields() {
     for offset in [
         core::mem::offset_of!(UpdateVaultArgs, asset_max_future_skew_seconds),
         core::mem::offset_of!(UpdateVaultArgs, max_aum_staleness_seconds),
+        core::mem::offset_of!(UpdateVaultArgs, queued_redeem_fee_bps),
     ] {
         update[1 + offset] = 2;
         assert!(VaultInstruction::deserialize(&update).is_err());

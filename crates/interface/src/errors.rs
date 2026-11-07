@@ -67,7 +67,7 @@ pub enum VaultError {
 
 impl From<VaultError> for ProgramError {
     fn from(e: VaultError) -> Self {
-        ProgramError::Custom(e as u32)
+        Self::Custom(e as u32)
     }
 }
 
@@ -148,7 +148,8 @@ impl ToStr for VaultError {
                  rather than re-pricing it"
             }
             Self::FeeAmountTooSmall => {
-                "Accrued fees are too small to mint a share — wait for more fees to accrue"
+                "Fee is too small to mint a share — redeem more shares, or wait for more \
+                 fees to accrue before crystallizing"
             }
             Self::InvalidOracleReport => {
                 "Chainlink Data Streams report is malformed, expired, or its feed id \

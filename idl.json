@@ -697,6 +697,22 @@
             },
             {
               "kind": "structFieldTypeNode",
+              "name": "nestReceiptMint",
+              "type": {
+                "kind": "publicKeyTypeNode"
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "queuedRedeemFeeBps",
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "u16",
+                "endian": "le"
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
               "name": "reserved",
               "type": {
                 "kind": "arrayTypeNode",
@@ -707,7 +723,7 @@
                 },
                 "count": {
                   "kind": "fixedCountNode",
-                  "value": 60
+                  "value": 128
                 }
               }
             }
@@ -1846,7 +1862,7 @@
           {
             "kind": "instructionAccountNode",
             "name": "shareMint",
-            "isWritable": false,
+            "isWritable": true,
             "isSigner": false
           },
           {
@@ -1900,6 +1916,18 @@
           {
             "kind": "instructionAccountNode",
             "name": "program",
+            "isWritable": false,
+            "isSigner": false
+          },
+          {
+            "kind": "instructionAccountNode",
+            "name": "curatorFeeAccount",
+            "isWritable": true,
+            "isSigner": false
+          },
+          {
+            "kind": "instructionAccountNode",
+            "name": "token2022",
             "isWritable": false,
             "isSigner": false
           }
@@ -3758,6 +3786,15 @@
                   }
                 ]
               }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "queuedRedeemFeeBps",
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "u16",
+                "endian": "le"
+              }
             }
           ]
         }
@@ -3780,6 +3817,15 @@
             {
               "kind": "structFieldTypeNode",
               "name": "value",
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "u64",
+                "endian": "le"
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "expectedBalance",
               "type": {
                 "kind": "numberTypeNode",
                 "format": "u64",
@@ -4725,6 +4771,24 @@
                   "endian": "le"
                 }
               }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "queuedRedeemFeeBps",
+              "type": {
+                "kind": "optionTypeNode",
+                "fixed": true,
+                "item": {
+                  "kind": "numberTypeNode",
+                  "format": "u16",
+                  "endian": "le"
+                },
+                "prefix": {
+                  "kind": "numberTypeNode",
+                  "format": "u8",
+                  "endian": "le"
+                }
+              }
             }
           ]
         }
@@ -5159,6 +5223,15 @@
             {
               "kind": "structFieldTypeNode",
               "name": "value",
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "u64",
+                "endian": "le"
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "balance",
               "type": {
                 "kind": "numberTypeNode",
                 "format": "u64",
@@ -6056,6 +6129,15 @@
                 "format": "i64",
                 "endian": "le"
               }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "queuedRedeemFeeBps",
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "u16",
+                "endian": "le"
+              }
             }
           ]
         },
@@ -6144,6 +6226,15 @@
             {
               "kind": "structFieldTypeNode",
               "name": "remaining",
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "u64",
+                "endian": "le"
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "feeShares",
               "type": {
                 "kind": "numberTypeNode",
                 "format": "u64",

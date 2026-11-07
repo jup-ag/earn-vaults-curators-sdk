@@ -59,6 +59,8 @@ pub struct InitializeVault<'a> {
     /// disabled; `Some(n)` enables it at `n` bps, which must sit inside
     /// `MIN_INSTANT_REDEEM_FEE_BPS..=MAX_INSTANT_REDEEM_FEE_BPS`.
     pub instant_redeem_fee_bps: Option<u16>,
+    /// Fee on settled queued shares, 0..=1,000 bps; zero disables it.
+    pub queued_redeem_fee_bps: u16,
     /// Ceiling on the transient flash liability, in numéraire micro-units. `0`
     /// leaves the path disabled.
     pub max_flash_liability: u64,
@@ -188,6 +190,7 @@ impl InitializeVault<'_> {
             management_fee_bps: self.management_fee_bps.into(),
             performance_fee_bps: self.performance_fee_bps.into(),
             instant_redeem_fee_bps: pod_opt(self.instant_redeem_fee_bps),
+            queued_redeem_fee_bps: self.queued_redeem_fee_bps.into(),
             max_flash_liability: self.max_flash_liability.into(),
             sink_haircut_bps: self.sink_haircut_bps.into(),
             sink_max_staleness_seconds: pod_opt(self.sink_max_staleness_seconds),
@@ -233,6 +236,7 @@ mod tests {
 
     fn fixture() -> InitializeVault<'static> {
         InitializeVault {
+            queued_redeem_fee_bps: 0,
             curator: address(1),
             created_at: 42,
             base_assets: vec![address(2)],
@@ -261,6 +265,25 @@ mod tests {
             metadata_name: "Share Token",
             metadata_symbol: "YLD",
             metadata_uri: "https://example.com",
+        }
+    }
+
+    #[test]
+    fn queued_fee_is_appended_to_initialization_bytes() {
+        use wincode::Deserialize;
+
+        for fee in [0, 75, 1_000] {
+            let mut init = fixture();
+            init.queued_redeem_fee_bps = fee;
+            let ix = init.into_instruction().unwrap();
+            assert_eq!(&ix.data[ix.data.len() - 2..], &fee.to_le_bytes());
+            let VaultInstruction::InitializeVault { args } =
+                VaultInstruction::deserialize(&ix.data).unwrap()
+            else {
+                panic!("wrong instruction");
+            };
+            assert_eq!(args.queued_redeem_fee_bps.get(), fee);
+            assert!(VaultInstruction::deserialize(&ix.data[..ix.data.len() - 2]).is_err());
         }
     }
 

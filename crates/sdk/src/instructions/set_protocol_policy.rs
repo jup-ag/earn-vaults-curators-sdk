@@ -4,7 +4,7 @@ use {
         VaultInstruction,
         arguments::SetProtocolPolicyArgs,
         encoding::ZcElem,
-        state::{CollateralTerms, Protocol},
+        state::{CollateralTerms, NestRoute, Protocol},
     },
     solana_address::Address,
     solana_instruction::{AccountMeta, Instruction},
@@ -14,7 +14,10 @@ use {
 fn bytes_of<T: ZcElem>(value: &T) -> Vec<u8> {
     // SAFETY: `T: ZcElem` — every byte of `value` is initialized.
     unsafe {
-        core::slice::from_raw_parts((value as *const T).cast::<u8>(), core::mem::size_of::<T>())
+        core::slice::from_raw_parts(
+            core::ptr::from_ref(value).cast::<u8>(),
+            core::mem::size_of::<T>(),
+        )
     }
     .to_vec()
 }
@@ -33,8 +36,30 @@ pub struct SetProtocolPolicy {
 }
 
 impl SetProtocolPolicy {
+    /// Pin the Nest receipt mint as position-only custody. The binding survives
+    /// policy close; a new receipt is accepted only once no Nest position remains.
+    pub fn nest_route(
+        curator: Address,
+        vault: Address,
+        route: NestRoute,
+        oft_store: Address,
+        receipt_mint: Address,
+    ) -> Self {
+        let enabled = route.enabled();
+        Self {
+            extra: if enabled {
+                vec![oft_store, receipt_mint]
+            } else {
+                vec![]
+            },
+            ..Self::protocol_wide(curator, vault, Protocol::Nest, enabled.then_some(route))
+        }
+    }
+
     /// A protocol-wide policy (key = the zero address); `None` closes it,
     /// which turns the protocol off.
+    ///
+    /// Use [`Self::nest_route`] for Nest so its receipt proof accounts are included.
     pub fn protocol_wide<T: ZcElem>(
         curator: Address,
         vault: Address,
@@ -104,5 +129,40 @@ impl SetProtocolPolicy {
                 payload: &self.payload,
             }),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nest_route_includes_receipt_proof_only_when_enabled() {
+        let curator = Address::new_from_array([1; 32]);
+        let vault = Address::new_from_array([2; 32]);
+        let store = Address::new_from_array([3; 32]);
+        let mint = Address::new_from_array([4; 32]);
+        let route = NestRoute {
+            composer: [5; 20],
+            relayer: [6; 20],
+            oft_commitment: NestRoute::commitment(&store, &mint),
+        };
+        let mut expected =
+            SetProtocolPolicy::protocol_wide(curator, vault, Protocol::Nest, Some(route))
+                .into_instruction();
+        expected.accounts.extend([
+            AccountMeta::new_readonly(store, false),
+            AccountMeta::new_readonly(mint, false),
+        ]);
+        assert_eq!(
+            SetProtocolPolicy::nest_route(curator, vault, route, store, mint).into_instruction(),
+            expected
+        );
+        assert_eq!(
+            SetProtocolPolicy::nest_route(curator, vault, NestRoute::zero(), store, mint)
+                .into_instruction(),
+            SetProtocolPolicy::protocol_wide::<NestRoute>(curator, vault, Protocol::Nest, None)
+                .into_instruction()
+        );
     }
 }

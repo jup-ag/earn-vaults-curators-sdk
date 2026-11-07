@@ -178,13 +178,11 @@ pub enum Settlement {
     /// reconciles the resulting mark. Re-attesting the folded value consumes no
     /// drift budget, including after a large legitimate movement.
     ///
-    /// It never extends the mark's **freshness**: a fold proves only the delta
-    /// it moved, while the rest of the position keeps accruing invisibly (Fluid
-    /// interest, an Earn fToken appreciating past its cost basis, anything past
-    /// the borrow fee). Stamping `last_priced_at` here would let a $1 `operate`
-    /// reset the staleness clock forever and suppress the `PricedSlotStale`
-    /// halt that forces the keeper to book that accrual — `price_opaque` is the
-    /// only writer of freshness.
+    /// A capped increasing fold rescales `last_priced_at` to carry the old absolute
+    /// drift allowance, rounded down; a zero mark carries none. Decreases keep
+    /// the timestamp. This does not attest the rest of the position:
+    /// clearing `PRICED` keeps AUM halted until `price_opaque` reconciles it,
+    /// including interest that accrued without custody movement.
     Operate {
         /// `(ta_index, flow)` of the collateral leg, when `new_col != 0`.
         col_leg: Option<(usize, Flow)>,
