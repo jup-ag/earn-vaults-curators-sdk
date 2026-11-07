@@ -9,6 +9,7 @@ pub mod errors;
 pub mod events;
 pub mod nav;
 pub mod ocr2;
+pub mod program_data;
 pub mod pyth_pro;
 pub mod seeds;
 pub mod state;

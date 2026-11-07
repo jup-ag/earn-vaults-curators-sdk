@@ -98,6 +98,17 @@ struct Cli {
     reason = "one parsed CLI command; boxing individual options adds needless indirection"
 )]
 enum Cmd {
+    /// Export an unsigned per-vault pause instruction for the upgrade multisig.
+    ExportPause {
+        /// Current program upgrade authority (the Squads vault PDA).
+        #[arg(long)]
+        authority: Address,
+        #[arg(long)]
+        vault: Address,
+        /// Pause bits: 1 deposits, 2 redemptions, 4 strategies; 7 pauses all three.
+        #[arg(long, default_value_t = 7, value_parser = clap::value_parser!(u8).range(0..=7))]
+        flags: u8,
+    },
     /// Print a live vault snapshot without a state file or keypair.
     Show {
         vault: Address,
@@ -1141,6 +1152,17 @@ fn main() -> Result<()> {
 
 fn dispatch(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
     match command {
+        Cmd::ExportPause {
+            authority,
+            vault,
+            flags,
+        } => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&pause_instruction_json(authority, vault, flags))?
+            );
+            Ok(())
+        }
         Cmd::Show { vault, user } => {
             println!("{:#?}", fetch_snapshot(ctx.url, vault, user)?);
             Ok(())
@@ -1166,6 +1188,24 @@ fn dispatch(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
         command @ Cmd::AcceptCurator { .. } => run_accept_curator(ctx, command),
         command @ Cmd::Fluid { .. } => run_fluid(command),
     }
+}
+
+fn pause_instruction_json(authority: Address, vault: Address, flags: u8) -> Value {
+    let ix = earn_vaults_sdk::instructions::SetPaused {
+        signer: authority,
+        vault,
+        flags,
+    }
+    .into_upgrade_authority_instruction();
+    json!({
+        "programId": ix.program_id.to_string(),
+        "keys": ix.accounts.iter().map(|meta| json!({
+            "pubkey": meta.pubkey.to_string(),
+            "isSigner": meta.is_signer,
+            "isWritable": meta.is_writable,
+        })).collect::<Vec<_>>(),
+        "data": B64.encode(&ix.data),
+    })
 }
 
 fn run_init_vault(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
@@ -2233,6 +2273,32 @@ struct RouteAcct {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn export_pause_uses_upgrade_authority_without_signing() {
+        let authority = Address::new_from_array([7; 32]);
+        let vault = Address::new_from_array([8; 32]);
+        let args = [
+            "earn-vaults",
+            "export-pause",
+            "--authority",
+            &authority.to_string(),
+            "--vault",
+            &vault.to_string(),
+        ];
+        let cli = Cli::try_parse_from(args).unwrap();
+        assert!(matches!(cli.cmd, Cmd::ExportPause { flags: 7, .. }));
+        let json = pause_instruction_json(authority, vault, 7);
+        assert_eq!(B64.decode(json["data"].as_str().unwrap()).unwrap(), [19, 7]);
+        assert_eq!(json["keys"][0]["pubkey"], authority.to_string());
+        assert_eq!(json["keys"][0]["isSigner"], true);
+        assert_eq!(
+            json["keys"][1]["pubkey"],
+            earn_vaults_sdk::constants::PROGRAM_DATA_PDA.0.to_string()
+        );
+        assert_eq!(json["keys"][2]["pubkey"], vault.to_string());
+        assert!(Cli::try_parse_from(args.into_iter().chain(["--flags", "8"])).is_err());
+    }
 
     #[test]
     fn sink_pricing_requires_paired_balance_and_custody_without_earn() {
