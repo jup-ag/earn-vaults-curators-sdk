@@ -14,8 +14,9 @@ pub struct AssetUpdate {
     pub index: u8,
     /// New feed id — the rotation path for a deprecated feed. A zero feed id
     /// makes the row hand-priced instead (`refresh_prices` skips it, the price
-    /// comes from `price_opaque`); a deposit-enabled row may not go feedless.
-    /// Either way the cached reading is retired: a new source, a new price.
+    /// comes from `price_opaque`, initially signed by the curator).
+    /// Supplying a feed resets its scale to zero unless `report_decimals` is
+    /// also supplied. The cache is retired only if the effective config changes.
     #[codama(type = option(public_key, fixed))]
     pub oracle: PodOption<Address>,
     /// Curator-settable `ASSET_FLAG_*` bits (`ASSET_FLAG_CURATOR_MASK`, today
@@ -24,9 +25,8 @@ pub struct AssetUpdate {
     #[codama(type = option(number(u8), fixed))]
     pub flags: PodOption<u8>,
     /// New [`AssetConfig::report_decimals`] for this row; `Some(0)` hands the
-    /// scale back to the source. Retires the cached reading like a rotation does
-    /// — the cache holds one exponent and nothing downstream can tell it was
-    /// struck under the old scale.
+    /// scale back to the source. A changed scale retires the cached reading;
+    /// an identical restatement preserves the cache and replay watermark.
     ///
     /// [`AssetConfig::report_decimals`]: crate::state::AssetConfig::report_decimals
     #[codama(type = option(number(u8), fixed))]
@@ -54,17 +54,18 @@ pub struct AssetUpdate {
     pub max_deposit: PodOption<U64>,
     /// Toggle deposits for this asset (`1` enable / `0` disable). Its own
     /// field, not a `flags` bit, so a provider switch can't silently rewrite
-    /// the deposit gate. A hand-priced row may not be deposit-enabled. Among
-    /// enabled rows, the lowest index is canonical for instant settlement;
-    /// later rows are queued-only.
+    /// the deposit gate. Among enabled rows, the lowest index is canonical
+    /// for direct deposits; later rows are queued-only. Manual pricing requires
+    /// instant redemption to remain disabled.
     #[codama(type = option(number(u8), fixed))]
     pub deposit_enabled: PodOption<u8>,
     /// Quote leg feed id of a composed price; the zero address makes the row
-    /// single-feed again. Retires the cached reading like a rotation does.
+    /// single-feed again. Resets its scale unless `quote_report_decimals` is
+    /// also supplied; retires the cache only if the effective config changes.
     #[codama(type = option(public_key, fixed))]
     pub quote_oracle: PodOption<Address>,
-    /// [`AssetUpdate::report_decimals`] for the quote leg. Retires the cached
-    /// reading.
+    /// [`AssetUpdate::report_decimals`] for the quote leg. A changed scale
+    /// retires the cached reading.
     #[codama(type = option(number(u8), fixed))]
     pub quote_report_decimals: PodOption<u8>,
 }
@@ -134,8 +135,7 @@ unsafe impl ZcElem for PositionUpdate {}
 pub struct AssetAdd {
     /// Feed id; the zero address makes the row hand-priced.
     pub oracle: Address,
-    /// `ASSET_FLAG_CHAINLINK` and/or `ASSET_FLAG_DEPOSIT_ENABLED` (a
-    /// hand-priced row may not be deposit-enabled).
+    /// `ASSET_FLAG_CHAINLINK` and/or `ASSET_FLAG_DEPOSIT_ENABLED`.
     pub flags: u8,
     /// The decimal scale the feed quotes its raw mantissa at; `0` leaves the
     /// source's own. See [`AssetUpdate::report_decimals`].
@@ -282,6 +282,9 @@ pub struct UpdateVaultArgs {
     /// Validated AUM age limit; zero selects 60s, positive u32 values apply exactly.
     #[codama(type = option(number(u32, le), fixed))]
     pub max_aum_staleness_seconds: PodOption<U32>,
+    /// Fee on queued shares at settlement; Some(0) disables, capped at 1,000 bps.
+    #[codama(type = option(number(u16, le), fixed))]
+    pub queued_redeem_fee_bps: PodOption<U16>,
 }
 
 impl ZcValidate for UpdateVaultArgs {
@@ -307,6 +310,7 @@ impl ZcValidate for UpdateVaultArgs {
         ZcValidate::validate_ref(&value.retire_debt)?;
         ZcValidate::validate_ref(&value.asset_max_future_skew_seconds)?;
         ZcValidate::validate_ref(&value.max_aum_staleness_seconds)?;
+        ZcValidate::validate_ref(&value.queued_redeem_fee_bps)?;
         Ok(())
     }
 }

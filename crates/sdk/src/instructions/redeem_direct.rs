@@ -13,6 +13,8 @@ use {
 /// shares). Reverts if the path is disabled (`InstantRedeemDisabled`), the AUM
 /// snapshot is stale (`StalePrice`), or idle base can't cover the full payout
 /// (`InsufficientIdleLiquidity`) — fall back to the queued [`crate::Redeem`].
+/// A positive exit fee that rounds to zero curator shares reverts with
+/// `FeeAmountTooSmall`; retry with a larger redemption amount.
 /// `min_out` is the least base-asset amount (base units, after the fee) the
 /// user accepts; a smaller payout reverts with `RedeemOutputBelowMinimum`.
 /// `0` disables the bound.

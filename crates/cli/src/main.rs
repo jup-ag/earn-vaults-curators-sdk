@@ -169,6 +169,9 @@ enum Cmd {
         /// Instant-withdrawal exit fee in bps (omit to disable RedeemDirect).
         #[arg(long)]
         instant_redeem_fee_bps: Option<u16>,
+        /// Fee on settled queued shares in bps (0..=1000; zero disables).
+        #[arg(long)]
+        queued_redeem_fee_bps: Option<u16>,
     },
     /// Grant a delegate a permission bitmask over one target program. Defaults
     /// to the Jupiter-swap bit. For vault-internal (system) permissions —
@@ -221,6 +224,12 @@ enum Cmd {
         /// Base-asset-denominated position value.
         #[arg(long)]
         value: u64,
+        /// Canonical custody ATA, required for a sink target (slot 64..67).
+        #[arg(long, requires = "expected_balance", conflicts_with = "earn")]
+        custody: Option<String>,
+        /// Raw custody balance used to calculate the sink mark.
+        #[arg(long, requires = "custody")]
+        expected_balance: Option<u64>,
     },
     /// Create the lifecycle ATAs under the program that owns each mint: the
     /// investor's base + share ATAs and the vault authority's base + optional
@@ -308,6 +317,9 @@ enum Cmd {
         /// flagged Earn-only (LENDER_ONLY).
         #[arg(long, value_name = "BPS")]
         instant_redeem_fee_bps: Option<u16>,
+        /// Fee on settled queued shares in bps (0..=1000; zero disables).
+        #[arg(long)]
+        queued_redeem_fee_bps: Option<u16>,
         /// Onboard a NEW asset row: the mint address. Stales the cached AUM —
         /// create the custody ATA, refresh the price, and validate-aum before
         /// the vault flows again.
@@ -389,8 +401,7 @@ enum Cmd {
         /// Maximum future timestamp skew for this asset; 0 rejects all future timestamps.
         #[arg(long, requires = "asset_index")]
         asset_max_future_skew: Option<u32>,
-        /// Toggle deposits for this asset (a hand-priced row may not take
-        /// deposits).
+        /// Toggle deposits for this asset, including hand-priced rows.
         #[arg(long, value_name = "BOOL", requires = "asset_index")]
         asset_deposit_enabled: Option<bool>,
         /// Decimal scale this row's feed quotes at; `0` hands it back to the
@@ -927,9 +938,9 @@ fn parse_ccip_lane(spec: &str) -> Result<CcipLane> {
     Ok(lane)
 }
 
-fn parse_nest_route(spec: &str) -> Result<NestRoute> {
+fn parse_nest_route(spec: &str) -> Result<(NestRoute, Address, Address)> {
     if spec == "disabled" {
-        return Ok(NestRoute::zero());
+        return Ok((NestRoute::zero(), Address::default(), Address::default()));
     }
     let mut fields = spec.split(':');
     let (Some(composer), Some(relayer), Some(oft_store), Some(share_mint), None) = (
@@ -952,15 +963,16 @@ fn parse_nest_route(spec: &str) -> Result<NestRoute> {
         }
         Ok(out)
     };
+    let (oft_store, share_mint) = (addr(oft_store)?, addr(share_mint)?);
     let route = NestRoute {
         composer: evm(composer)?,
         relayer: evm(relayer)?,
-        oft_commitment: NestRoute::commitment(&addr(oft_store)?, &addr(share_mint)?),
+        oft_commitment: NestRoute::commitment(&oft_store, &share_mint),
     };
     route
         .validate()
         .map_err(|_| anyhow!("invalid Nest route"))?;
-    Ok(route)
+    Ok((route, oft_store, share_mint))
 }
 
 fn load_state(path: &PathBuf) -> Result<State> {
@@ -1170,6 +1182,7 @@ fn run_init_vault(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
         management_fee_bps,
         performance_fee_bps,
         instant_redeem_fee_bps,
+        queued_redeem_fee_bps,
     } = command
     else {
         unreachable!("dispatch passed the wrong command to run_init_vault")
@@ -1211,10 +1224,8 @@ fn run_init_vault(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
         (None, None, None) => (vec![], vec![]),
         _ => unreachable!("clap requires the other mint, oracle, and feed id together"),
     };
-    let asset_mints: Vec<_> = [addr(&base_mint)?]
-        .into_iter()
-        .chain(other_assets.iter().copied())
-        .collect();
+    let mut asset_mints = vec![addr(&base_mint)?];
+    asset_mints.extend(&other_assets);
     let ix = InitializeVault {
         // The sink and flash knobs all default off here; `update-vault`
         // sets them together once the vault exists.
@@ -1239,6 +1250,7 @@ fn run_init_vault(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
         management_fee_bps: management_fee_bps.unwrap_or(0),
         performance_fee_bps: performance_fee_bps.unwrap_or(0),
         instant_redeem_fee_bps,
+        queued_redeem_fee_bps: queued_redeem_fee_bps.unwrap_or(0),
         metadata_name: "Share Token",
         metadata_symbol: "JUPS",
         metadata_uri: "https://jup.ag/",
@@ -1370,6 +1382,8 @@ fn run_price_opaque(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
         earn,
         slot,
         value,
+        custody,
+        expected_balance,
     } = command
     else {
         unreachable!("dispatch passed the wrong command to run_price_opaque")
@@ -1384,10 +1398,24 @@ fn run_price_opaque(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
         slot,
         value,
     };
-    let ix = if earn {
-        ix.into_earn_instruction()
-    } else {
-        ix.into_instruction()
+    let sink = slot & earn_vaults_sdk::arguments::SINK_TARGET != 0;
+    // clap's `requires` pairs custody with expected_balance in both directions.
+    let ix = match custody.zip(expected_balance) {
+        Some((custody, balance)) => {
+            anyhow::ensure!(sink, "custody requires a sink target");
+            ix.into_sink_instruction(addr(&custody)?, balance)
+        }
+        None => {
+            anyhow::ensure!(
+                !sink,
+                "sink pricing requires --custody and --expected-balance, without --earn"
+            );
+            if earn {
+                ix.into_earn_instruction()
+            } else {
+                ix.into_instruction()
+            }
+        }
     };
     println!(
         "priced slot {slot} = {value} ({})",
@@ -1599,6 +1627,7 @@ fn run_update_vault(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
         management_fee_bps,
         performance_fee_bps,
         instant_redeem_fee_bps,
+        queued_redeem_fee_bps,
         add_asset_mint,
         add_asset_feed_id,
         add_asset_oracle,
@@ -1737,10 +1766,9 @@ fn run_update_vault(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
         );
     }
     if let Some(spec) = nest_route.as_deref() {
-        let route = parse_nest_route(spec)?;
-        let route = route.enabled().then_some(route);
+        let (route, oft_store, share_mint) = parse_nest_route(spec)?;
         ixs.push(
-            SetProtocolPolicy::protocol_wide(curator_key, vault_key, Protocol::Nest, route)
+            SetProtocolPolicy::nest_route(curator_key, vault_key, route, oft_store, share_mint)
                 .into_instruction(),
         );
     }
@@ -1778,6 +1806,7 @@ fn run_update_vault(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
         management_fee_bps,
         performance_fee_bps,
         instant_redeem_fee_bps,
+        queued_redeem_fee_bps,
         asset_update: asset_index.map(|index| AssetUpdateFields {
             report_decimals: asset_report_decimals,
             quote_oracle: asset_quote_oracle,
@@ -2206,6 +2235,51 @@ mod tests {
     use super::*;
 
     #[test]
+    fn sink_pricing_requires_paired_balance_and_custody_without_earn() {
+        let args = [
+            "earn-vaults",
+            "price-opaque",
+            "--delegate",
+            "delegate.json",
+            "--slot",
+            "64",
+            "--value",
+            "42",
+        ];
+        let custody = Address::new_from_array([3; 32]).to_string();
+        for extra in [
+            vec!["--custody", &custody],
+            vec!["--expected-balance", "123"],
+            vec!["--custody", &custody, "--expected-balance", "123", "--earn"],
+        ] {
+            assert!(Cli::try_parse_from(args.into_iter().chain(extra)).is_err());
+        }
+        let cli = Cli::try_parse_from(args.into_iter().chain([
+            "--custody",
+            &custody,
+            "--expected-balance",
+            "123",
+        ]))
+        .unwrap();
+        assert!(matches!(cli.cmd, Cmd::PriceOpaque {
+            custody: Some(parsed), expected_balance: Some(123), ..
+        } if parsed == custody));
+    }
+
+    #[test]
+    fn nest_route_parser_preserves_receipt_proof_accounts() {
+        let store = Address::new_from_array([3; 32]);
+        let mint = Address::new_from_array([4; 32]);
+        let spec = format!("{}:{}:{store}:{mint}", "11".repeat(20), "22".repeat(20));
+        let (route, parsed_store, parsed_mint) = parse_nest_route(&spec).unwrap();
+        assert_eq!((parsed_store, parsed_mint), (store, mint));
+        assert!(route.permits_oft(&store, &mint));
+        let (route, store, mint) = parse_nest_route("disabled").unwrap();
+        assert!(!route.enabled());
+        assert_eq!((store, mint), (Address::default(), Address::default()));
+    }
+
+    #[test]
     fn price_opaque_earn_grant_is_opt_in() {
         for earn in [false, true] {
             let mut args = vec![
@@ -2581,6 +2655,7 @@ mod tests {
             management_fee_bps,
             performance_fee_bps,
             instant_redeem_fee_bps,
+            queued_redeem_fee_bps,
             ..
         } = cli.cmd
         else {
@@ -2597,6 +2672,7 @@ mod tests {
         assert!(management_fee_bps.is_none());
         assert!(performance_fee_bps.is_none());
         assert!(instant_redeem_fee_bps.is_none());
+        assert!(queued_redeem_fee_bps.is_none());
     }
 
     #[test]
@@ -2786,6 +2862,8 @@ mod tests {
             "750",
             "--instant-redeem-fee-bps",
             "50",
+            "--queued-redeem-fee-bps",
+            "75",
             "--retire-debt",
             "0",
         ])
@@ -2804,6 +2882,7 @@ mod tests {
             management_fee_bps,
             performance_fee_bps,
             instant_redeem_fee_bps,
+            queued_redeem_fee_bps,
             retire_debt,
             ..
         } = cli.cmd
@@ -2823,6 +2902,7 @@ mod tests {
         assert_eq!(management_fee_bps, Some(125));
         assert_eq!(performance_fee_bps, Some(750));
         assert_eq!(instant_redeem_fee_bps, Some(50));
+        assert_eq!(queued_redeem_fee_bps, Some(75));
         assert_eq!(retire_debt, Some(0));
     }
 }

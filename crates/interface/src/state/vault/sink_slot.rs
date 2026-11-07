@@ -21,6 +21,9 @@ pub struct SinkSlot {
     /// Numéraire mark for the full custody balance of [`Self::mint`].
     #[codama(type = number(u64))]
     pub value: U64,
+    /// Raw custody quantity covered by [`Self::value`]. Zero means unbound.
+    #[codama(type = number(u64))]
+    pub balance: U64,
     /// Last attestation time for [`Self::value`].
     #[codama(type = number(i64))]
     pub last_priced_at: I64,
@@ -34,6 +37,7 @@ impl SinkSlot {
         Self {
             mint: Address::new_from_array([0; 32]),
             value: U64::ZERO,
+            balance: U64::ZERO,
             last_priced_at: I64::ZERO,
             flags: 0,
         }
@@ -54,6 +58,16 @@ impl SinkSlot {
     #[inline]
     pub fn dirty(&mut self) {
         self.flags &= !SINK_FLAG_PRICED;
+    }
+
+    /// Retain the pricing basis for a partial exit; free a fully drained sink.
+    #[inline]
+    pub fn record_outflow(&mut self, remaining_balance: u64) {
+        if remaining_balance == 0 {
+            self.release();
+        } else {
+            self.dirty();
+        }
     }
 
     /// Whether the slot is available.

@@ -88,7 +88,8 @@ pub const MAX_SWAP_SLIPPAGE_BPS: u64 = 100;
 /// retired sink mark less this. Looser — seized collateral executes worse.
 pub const MAX_LIQ_SLIPPAGE_BPS: u64 = 500;
 
-/// Refill duration for both slippage buckets, in seconds. 1h.
+/// Seconds to refill one current-AUM capacity in either slippage bucket (1h).
+/// Excess debt after an AUM shrink can require multiple refill periods to clear.
 pub const SWAP_SLIPPAGE_WINDOW_SECONDS: i64 = 60 * 60;
 
 /// Swap slippage bucket capacity, in bps of AUM, refilling linearly over
@@ -127,6 +128,8 @@ pub const MAX_TIMELOCK_DELAY: U64 = U64::from_bytes((30u64 * 24 * 60 * 60).to_le
 pub const DEFAULT_TIMELOCK_DELAY: U64 = U64::from_bytes((24_u64 * 60 * 60).to_le_bytes());
 
 pub const MAX_INSTANT_REDEEM_FEE_BPS: u16 = 1_000;
+/// Maximum curator fee on settled queued shares (10%).
+pub const MAX_QUEUED_REDEEM_FEE_BPS: u16 = 1_000;
 pub const MIN_INSTANT_REDEEM_FEE_BPS: u16 = 50;
 
 /// Cap on the annual streaming `Vault.management_fee_bps` — bounds curator

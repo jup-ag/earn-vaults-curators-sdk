@@ -22,7 +22,8 @@ use {
 /// included, where the NAV itself needs no AUM.
 ///
 /// `vault_token_account` must be a vault-PDA-owned token account of
-/// `base_mint`; `user_share_account` is the user's account for the share mint.
+/// `base_mint`; `user_share_account` must be an immutable Token-2022 account
+/// owned by `user` for the share mint. If absent, it must be the user's ATA.
 pub struct SubscribeDirect {
     pub user: Address,
     pub user_token_account: Address,

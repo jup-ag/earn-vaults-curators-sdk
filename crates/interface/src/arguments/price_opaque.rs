@@ -24,4 +24,7 @@ pub struct PriceOpaqueArgs {
     pub slot_idx: u8,
     #[codama(type = number(u64))]
     pub value: U64,
+    /// Raw canonical custody balance covered by a sink mark; zero for other targets.
+    #[codama(type = number(u64))]
+    pub expected_balance: U64,
 }

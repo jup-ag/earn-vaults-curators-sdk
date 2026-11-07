@@ -27,4 +27,6 @@ pub struct InitializeVaultEvent {
     pub timelock_delay: U64,
     #[codama(type = number(i64))]
     pub created_at: I64,
+    #[codama(type = number(u16))]
+    pub queued_redeem_fee_bps: U16,
 }

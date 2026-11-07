@@ -229,9 +229,11 @@ pub fn confirm(url: &str, sig: &str) -> Result<()> {
             if let Some(err) = status.get("err").filter(|e| !e.is_null()) {
                 bail!("tx {sig} failed on-chain: {err}");
             }
-            match status["confirmationStatus"].as_str() {
-                Some("confirmed") | Some("finalized") => return Ok(()),
-                _ => {}
+            if matches!(
+                status["confirmationStatus"].as_str(),
+                Some("confirmed" | "finalized")
+            ) {
+                return Ok(());
             }
         }
         thread::sleep(Duration::from_millis(500));
@@ -353,6 +355,7 @@ pub struct VaultSnapshot {
     pub performance_fee_bps: u16,
     /// `u16::MAX` = instant redeem disabled.
     pub instant_redeem_fee_bps: u16,
+    pub queued_redeem_fee_bps: u16,
     pub share_mint: Address,
     pub authority: Address,
     pub share_supply: u64,
@@ -484,6 +487,7 @@ pub fn fetch_snapshot(url: &str, vault: Address, user: Option<Address>) -> Resul
         management_fee_bps: vs.management_fee_bps.get(),
         performance_fee_bps: vs.performance_fee_bps.get(),
         instant_redeem_fee_bps: vs.instant_redeem_fee_bps.get(),
+        queued_redeem_fee_bps: vs.queued_redeem_fee_bps.get(),
         share_mint,
         authority,
         share_supply,

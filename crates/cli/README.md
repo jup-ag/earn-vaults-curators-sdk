@@ -42,6 +42,24 @@ lender-only. Omitting `--earn` selects the vault-internal PRICE grant (`1`).
 Scoped pricing requires the upgraded program; see the
 [compatibility notes](../../docs/compatibility.md).
 
+To mark seized collateral in sink slot 0 (`64 = SINK_TARGET | 0`):
+
+```sh
+earn-vaults --rpc RPC_URL --state vault-state.json price-opaque \
+  --delegate DELEGATE_KEYPAIR --slot 64 --value RAW_BASE_VALUE \
+  --custody CANONICAL_CUSTODY_ATA --expected-balance RAW_TOKEN_BALANCE
+```
+
+Use the custody balance that produced the valuation. Both flags are required
+for sink pricing and cannot be combined with `--earn`. All pricing payloads now
+include the balance field; upgrade clients with the program. Existing vaults
+also require a separate account migration; see the compatibility notes above.
+
+`update-vault --nest-route COMPOSER:RELAYER:OFT_STORE:SHARE_MINT` now forwards
+the OFT store and receipt mint to bind the route. `--nest-route disabled` closes
+a bound route. Management/performance fee updates automatically include the
+share mint required by the upgraded program.
+
 Amounts are raw integers: USD values use 6 decimals, token balances use the
 asset's `decimals`, and NAV/HWM use the interface's `NAV_SCALE` fixed point.
 Timestamps are Unix seconds; `last_priced_at` records the last on-chain pricing,
@@ -66,3 +84,11 @@ nonce, minimum shares); `Redeem` is 57 bytes (tag, shares, nonce, minimum tokens
 payout mint). `Escrow` retains discriminator 3 and the same PDA, with its
 102-byte header followed by `min_out`, `original_shares`, and `payout_mint`
 (150 bytes total). Update account consumers for the extended layout.
+
+Set `--queued-redeem-fee-bps 75` on `init-vault` or `update-vault` to charge
+0.75% of settled queued shares for the curator. Initialization defaults to zero;
+omitting the update flag leaves the rate unchanged, and passing zero disables
+it. The allowed range is 0..=1,000 bps. `show` includes the configured rate.
+Each fill uses the current rate, including requests queued before a rate change;
+`min_out` applies to net proceeds. Fulfillment supplies the curator fee account
+automatically, with the delegate paying rent if it needs creation.

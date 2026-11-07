@@ -27,6 +27,9 @@ pub struct RedeemFulfilled {
     pub amount_paid: U64,
     #[codama(type = number(u64))]
     pub remaining: U64,
+    /// Settled shares retained for the curator instead of paid out.
+    #[codama(type = number(u64))]
+    pub fee_shares: U64,
 }
 
 // VaultEvent::Redeemed = 7.

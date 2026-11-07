@@ -8,7 +8,8 @@ pub mod offerbook {
     /// Claim a filled loan's repayment/default collateral; paired with
     /// [`ESCROW`] to withdraw unlisted seized collateral into custody.
     pub const CLAIM: u64 = 1 << 2;
-    /// Fill a principal offer as borrower, subject to curator loan limits.
+    /// Fill a principal offer or extend an existing loan as borrower, subject
+    /// to current curator loan limits.
     pub const BORROW: u64 = 1 << 3;
     /// Repay a borrowed loan to release its collateral.
     pub const REPAY: u64 = 1 << 4;
