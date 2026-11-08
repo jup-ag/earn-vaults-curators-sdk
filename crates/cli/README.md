@@ -16,6 +16,16 @@ and fees. It reads directly from the vault address, without a state file or
 keypair. Add `--user <pubkey>` to include that investor's shares and redeem value.
 Use `--rpc <url>` or `SOLANA_RPC_URL` to select the cluster (default: mainnet).
 
+Transactions without lookup tables use v1 (up to 4096 bytes). Supplying
+`--lut` retains v0 and its 1232-byte limit. `--priority-fee` remains in
+micro-lamports per CU; v1 converts it to a total lamport fee using the compute
+limit. Without `--compute-limit`, v1 requests 200k CU per instruction, capped at
+1.4M, and allows 64 MiB of loaded account data. Use an RPC and cluster supporting v1.
+
+Share names now accept up to 50 UTF-8 bytes (symbols 5, URIs 200). Initialization
+and metadata-update payloads grow by 25 bytes: deploy matching program and clients.
+Existing vault accounts and share mints on `3ea4f47` need no data migration.
+
 To export an unsigned emergency pause instruction for the upgrade multisig:
 
 ```sh
@@ -103,3 +113,22 @@ it. The allowed range is 0..=1,000 bps. `show` includes the configured rate.
 Each fill uses the current rate, including requests queued before a rate change;
 `min_out` applies to net proceeds. Fulfillment supplies the curator fee account
 automatically, with the delegate paying rent if it needs creation.
+
+## Offerbook routes
+
+Build a route for the state file's vault, then forward it through `protocol-cpi`:
+
+```sh
+earn-vaults offerbook set-yield-operator --operator OPERATOR_PUBKEY --out route.json
+earn-vaults protocol-cpi --delegate DELEGATE_KEYPAIR --route-file route.json
+
+earn-vaults offerbook set-yield-operator --operator none --out clear-route.json
+earn-vaults offerbook extend-loan --loan LOAN_PUBKEY --out renewal-route.json
+```
+
+Naming an operator requires `YIELD`; clearing it requires `ESCROW`. Revoke the
+operator explicitly: removing its delegate grant does not clear it. Renewal
+requires `BORROW` and reads the loan and config over RPC to derive Offerbook's
+18 accounts plus the vault's two policy accounts. Use this renewal layout only
+after Offerbook upgrades to `736d809`. See the
+[compatibility notes](../../docs/compatibility.md).

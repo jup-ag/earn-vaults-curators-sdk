@@ -1,6 +1,54 @@
 # Compatibility notes
 
-Synced with earn vault program commit `3ea4f47386be83e3fe06e3b1210d507f965121bc`.
+Synced with earn vault program commit `4b20d514b2f40ca871903f441c6c93403944ccd8`.
+
+## Share metadata, CLI transactions and Offerbook (`4b20d51`)
+
+`InitializeVaultArgs.metadata_name` and `UpdateShareMetaArgs.metadata_name` now
+hold 50 UTF-8 bytes instead of 25; symbols remain 5 bytes and URIs 200 bytes.
+Both instruction payloads grow by 25 bytes. Upgrade the program and rebuild SDK,
+CLI and IDL clients together: old payloads are rejected. Existing vault accounts
+and share mints need no data migration from `3ea4f47`. Rebuild pending metadata
+and initialization transactions; rollback requires matching program and clients.
+
+CLI transactions without lookup tables now use v1 (up to 4096 bytes); supplying
+`--lut` retains v0 and its 1232-byte limit. `--priority-fee` remains in
+micro-lamports per CU, converted to a total lamport fee for v1. The default v1
+budget is 200k CU per instruction, capped at 1.4M, with 64 MiB of loaded account
+data. The RPC and cluster must support v1 transactions.
+
+The new `offerbook` SDK module and CLI routes target
+[Offerbook `736d809`](https://github.com/jup-ag/offerbook-program/tree/736d809).
+`offerbook::SetYieldOperator` names an operator with `YIELD` (64), or clears it
+with `ESCROW` (1). It forwards the vault authority, its writable Offerbook User,
+event authority and program, without loan policies. The operator can top up and
+compound that User's yield directly through Offerbook; revoking a vault delegate
+does not revoke the operator. Clear it explicitly with `operator: None`.
+
+`offerbook::ExtendLoan` derives the new 18-account token/token renewal layout,
+including collateral accounts and an absent Core asset, then appends the two
+vault loan policies. The previous generated 13-account builder must no longer be
+used after the Offerbook upgrade. The vault adapter accepts both layouts, but
+each Offerbook version rejects the other's: upgrade the vault first, hold
+renewals across the Offerbook upgrade, and then switch clients. Extension needs
+`BORROW` (8); re-price the position and validate AUM after renewal. No vault
+account migration or hook change is needed for these Offerbook routes.
+
+The regenerated `offerbook-client` includes the five new optional fields on
+`ExtendLoanAccounts`, operator and fee-profile instructions, and `LoanExtendedV3`.
+Its `User` and `Config` types consume reserved bytes without growing; update
+Rust struct literals for the new fields and reduced reserves. Event consumers
+must recognize `LoanExtendedV3` and its interest/fee amounts.
+
+The audited Offerbook recall also turns yield OFF; re-enable explicitly when
+needed. Yield supply requires at least 10 raw atoms, and top-up may deliver up
+to 9 extra atoms. Renewals recheck Offerbook's live rate and duration limits,
+charge interest and new-period fees, and release surplus collateral after a
+paydown. Per-user fee profiles affect valuation; do not assume global fees.
+See the [upstream yield guide](https://github.com/jup-ag/earn-vaults-programs/blob/4b20d514b2f40ca871903f441c6c93403944ccd8/docs/OFFERBOOK_ESCROW_YIELD.md)
+and [renewal reference](https://github.com/jup-ag/earn-vaults-programs/blob/4b20d514b2f40ca871903f441c6c93403944ccd8/docs/technical-reference.md).
+Rollback after the Offerbook upgrade must preserve a vault adapter and renewal
+clients compatible with its 18-account layout.
 
 ## Upgrade-authority pause and treasury (`3ea4f47`)
 
@@ -108,7 +156,7 @@ positions or occupied sinks; a zero mark alone does not clear that exposure.
 Offerbook borrower renewals can now route the existing `ExtendLoan` builder via
 `ProtocolCpi` with `BORROW` (`1 << 3`). Use the vault authority as borrower and
 clear its outer signer flag. Append the loan-limits policy followed by the
-collateral-mint policy after the 13 Offerbook accounts. Current limits, lender
+collateral-mint policy after the Offerbook accounts (18 at `4b20d51`, previously 13). Current limits, lender
 consent and minimum renewal spacing apply; renewal fees require idle principal
 liquidity. Re-price the position and validate AUM after renewal. Lender-only
 vaults cannot renew as borrower.

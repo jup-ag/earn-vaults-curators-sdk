@@ -2491,6 +2491,11 @@
         },
         {
           "name": "user_jl_token_account",
+          "docs": [
+            "Created if missing, as on deposit: a user who opted in but was never",
+            "cranked has no share account yet, and the documented no-op must not",
+            "revert for them (audit I-02)."
+          ],
           "writable": true,
           "pda": {
             "seeds": [
@@ -2549,7 +2554,8 @@
         {
           "name": "claim_account",
           "docs": [
-            "enforced by the seeds below, created via CPI on first use"
+            "enforced by the seeds below. Only its address is needed: Earn pays out",
+            "directly and never writes to it, so it is never created."
           ],
           "writable": true,
           "pda": {
@@ -2807,6 +2813,11 @@
         },
         {
           "name": "user_jl_token_account",
+          "docs": [
+            "Created if missing, as on deposit: a user who opted in but was never",
+            "cranked has no share account yet, and the documented no-op must not",
+            "revert for them (audit I-02)."
+          ],
           "writable": true,
           "pda": {
             "seeds": [
@@ -2865,7 +2876,8 @@
         {
           "name": "claim_account",
           "docs": [
-            "enforced by the seeds below, created via CPI on first use"
+            "enforced by the seeds below. Only its address is needed: Earn pays out",
+            "directly and never writes to it, so it is never created."
           ],
           "writable": true,
           "pda": {
@@ -3143,6 +3155,41 @@
         },
         {
           "name": "principal_token_program"
+        },
+        {
+          "name": "collateral_mint",
+          "docs": [
+            "Collateral accounts, needed only to release surplus collateral after a",
+            "paydown (audit L-04). Validated in the handler against the loan."
+          ],
+          "optional": true
+        },
+        {
+          "name": "loan_vault",
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "borrower_collateral_escrow",
+          "docs": [
+            "The borrower's collateral escrow, `ATA(signer_user, collateral_mint)`,",
+            "where a partial repayment also releases collateral."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "collateral_token_program",
+          "optional": true
+        },
+        {
+          "name": "core_asset",
+          "docs": [
+            "The collateral asset of a Core NFT loan, required for every one of them:",
+            "the asset alone says whether its collection is custody-gated (audit",
+            "round 2 M-01). Left out for any other collateral."
+          ],
+          "optional": true
         },
         {
           "name": "event_authority",
@@ -4440,8 +4487,8 @@
     {
       "name": "repay_non_fungible_loan",
       "docs": [
-        "`amount: None` settles the loan; `Some(x)` pays down `x` of the principal",
-        "and leaves it running, with the collateral still locked."
+        "Settles the loan in full. `amount` must be `None`: NFT collateral is",
+        "indivisible, so a principal paydown is rejected with `InvalidRepayAmount`."
       ],
       "discriminator": [
         148,
@@ -5033,6 +5080,99 @@
       ]
     },
     {
+      "name": "set_user_fee_profile",
+      "docs": [
+        "`None` clears the profile: the user pays the config rates again."
+      ],
+      "discriminator": [
+        90,
+        172,
+        10,
+        30,
+        15,
+        79,
+        62,
+        94
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config"
+        },
+        {
+          "name": "user",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  117,
+                  115,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "user"
+              }
+            ]
+          }
+        },
+        {
+          "name": "event_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  95,
+                  95,
+                  101,
+                  118,
+                  101,
+                  110,
+                  116,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": [
+        {
+          "name": "profile",
+          "type": {
+            "option": {
+              "defined": {
+                "name": "UserFeeProfile"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
       "name": "set_yield_enabled",
       "discriminator": [
         110,
@@ -5107,6 +5247,86 @@
         {
           "name": "enabled",
           "type": "bool"
+        }
+      ]
+    },
+    {
+      "name": "set_yield_operator",
+      "discriminator": [
+        191,
+        2,
+        217,
+        79,
+        34,
+        85,
+        48,
+        82
+      ],
+      "accounts": [
+        {
+          "name": "signer",
+          "signer": true
+        },
+        {
+          "name": "signer_user",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  117,
+                  115,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "signer"
+              }
+            ]
+          }
+        },
+        {
+          "name": "event_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  95,
+                  95,
+                  101,
+                  118,
+                  101,
+                  110,
+                  116,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": [
+        {
+          "name": "operator",
+          "type": {
+            "option": "pubkey"
+          }
         }
       ]
     },
@@ -5470,6 +5690,19 @@
       ]
     },
     {
+      "name": "LoanExtendedV3",
+      "discriminator": [
+        91,
+        8,
+        174,
+        242,
+        55,
+        219,
+        184,
+        163
+      ]
+    },
+    {
       "name": "LoanPartiallyRepaid",
       "discriminator": [
         74,
@@ -5717,6 +5950,19 @@
       ]
     },
     {
+      "name": "UserFeeProfileUpdated",
+      "discriminator": [
+        73,
+        251,
+        11,
+        192,
+        89,
+        239,
+        98,
+        37
+      ]
+    },
+    {
       "name": "YieldEnabledUpdated",
       "discriminator": [
         67,
@@ -5727,6 +5973,19 @@
         56,
         84,
         26
+      ]
+    },
+    {
+      "name": "YieldOperatorUpdated",
+      "discriminator": [
+        96,
+        44,
+        186,
+        62,
+        149,
+        138,
+        12,
+        255
       ]
     }
   ],
@@ -5910,6 +6169,26 @@
       "code": 6035,
       "name": "YieldDepositNoShares",
       "msg": "Yield Deposit Returned No Shares"
+    },
+    {
+      "code": 6036,
+      "name": "CustodyNotConfirmed",
+      "msg": "Custody Not Confirmed"
+    },
+    {
+      "code": 6037,
+      "name": "CustodyExpired",
+      "msg": "Custody Expired"
+    },
+    {
+      "code": 6038,
+      "name": "GatedCollectionsFull",
+      "msg": "Gated Collections Full"
+    },
+    {
+      "code": 6039,
+      "name": "GatedCollectionNotFound",
+      "msg": "Gated Collection Not Found"
     }
   ],
   "types": [
@@ -6249,11 +6528,20 @@
             "type": "pubkey"
           },
           {
+            "name": "gated_collections",
+            "type": {
+              "array": [
+                "pubkey",
+                4
+              ]
+            }
+          },
+          {
             "name": "_reserved",
             "type": {
               "array": [
                 "u8",
-                368
+                240
               ]
             }
           }
@@ -7386,9 +7674,15 @@
           {
             "name": "repaid_principal",
             "docs": [
-              "Principal paid down ahead of settlement. `principal_amount` stays the",
-              "amount originally disbursed, so a consumer wanting what is still owed",
-              "must read `principal_amount - repaid_principal + interest`."
+              "Principal paid down ahead of settlement in the current period. What is",
+              "still owed is `principal_amount - repaid_principal + interest`.",
+              "",
+              "Per-period, not lifetime: `principal_amount`, `repaid_principal`,",
+              "`collateral_amount` and `interest` are all rebased at each extension",
+              "(`LoanExtendedV2`), which folds the paydown into `principal_amount` and",
+              "resets this field to 0. A consumer tracking the original disbursement or",
+              "cumulative repayment must keep it from `LoanCreatedV2` and by summing",
+              "`LoanPartiallyRepaid.amount`, not read it off the snapshot."
             ],
             "type": "u64"
           }
@@ -7456,14 +7750,65 @@
       }
     },
     {
+      "name": "LoanExtendedV3",
+      "docs": [
+        "`extend_loan`: `LoanExtendedV2` plus what the roll moved. `loan` is the",
+        "loan after the roll, so these amounts are otherwise only recoverable by",
+        "re-running the extension pricing against the loan as it stood before, or",
+        "by pairing the transaction's `EscrowDeposit` / `ProtocolFee` events (which",
+        "are skipped when nothing is due). Informational: nothing reads them back."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "loan",
+            "type": {
+              "defined": {
+                "name": "LoanEventV2"
+              }
+            }
+          },
+          {
+            "name": "pubkey",
+            "type": "pubkey"
+          },
+          {
+            "name": "interest_due",
+            "docs": [
+              "Interest settled for the period that closed, paid by the borrower to",
+              "the lender, before the repay fee comes out of it."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "repay_fee",
+            "docs": [
+              "Repay-side protocol fee, taken out of `interest_due`."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "origination_fee",
+            "docs": [
+              "Origination fee for the period that opened, paid by the borrower."
+            ],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
       "name": "LoanPartiallyRepaid",
       "docs": [
         "A principal paydown that left the loan open.",
         "",
         "Carries the same `LoanEventV2` snapshot as the rest of the loan lifecycle, so",
         "a consumer can treat every loan event uniformly, plus the two figures a",
-        "snapshot cannot express: what moved in *this* payment. Cumulative state lives",
-        "on the snapshot as `repaid_principal`."
+        "snapshot cannot express: what moved in *this* payment. The snapshot's",
+        "`repaid_principal` is cumulative only within the current period: an",
+        "extension resets it to 0, so lifetime repayment is the sum of `amount` over",
+        "these events."
       ],
       "type": {
         "kind": "struct",
@@ -9135,6 +9480,24 @@
                 "type": "pubkey"
               }
             ]
+          },
+          {
+            "name": "AddGatedCollection",
+            "fields": [
+              {
+                "name": "collection",
+                "type": "pubkey"
+              }
+            ]
+          },
+          {
+            "name": "RemoveGatedCollection",
+            "fields": [
+              {
+                "name": "collection",
+                "type": "pubkey"
+              }
+            ]
           }
         ]
       }
@@ -9236,13 +9599,95 @@
             }
           },
           {
+            "name": "yield_operator",
+            "type": "pubkey"
+          },
+          {
+            "name": "origination_fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "repay_fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "liquidation_fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "_padding2",
+            "type": {
+              "array": [
+                "u8",
+                2
+              ]
+            }
+          },
+          {
             "name": "_reserved",
             "type": {
               "array": [
                 "u8",
-                64
+                24
               ]
             }
+          }
+        ]
+      }
+    },
+    {
+      "name": "UserFeeProfile",
+      "docs": [
+        "Fee rates for one user, each applied to the fees that user pays: the",
+        "origination fee (in `Config` terms `interest_fee_bps`) when they borrow,",
+        "the repay and liquidation fees when they lend. Same units and bounds as the",
+        "config rates they replace."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "origination_fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "repay_fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "liquidation_fee_bps",
+            "type": "u16"
+          }
+        ]
+      }
+    },
+    {
+      "name": "UserFeeProfileUpdated",
+      "docs": [
+        "The admin set (`Some`) or cleared (`None`) a user's fee profile. While one",
+        "is set, the fees this user pays are billed at its rates instead of the",
+        "config's."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "user",
+            "type": "pubkey"
+          },
+          {
+            "name": "profile",
+            "type": {
+              "option": {
+                "defined": {
+                  "name": "UserFeeProfile"
+                }
+              }
+            }
+          },
+          {
+            "name": "timestamp",
+            "type": "u64"
           }
         ]
       }
@@ -9410,6 +9855,29 @@
           {
             "name": "liquidity",
             "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "YieldOperatorUpdated",
+      "docs": [
+        "`operator` is Pubkey::default() when cleared."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "user",
+            "type": "pubkey"
+          },
+          {
+            "name": "operator",
+            "type": "pubkey"
+          },
+          {
+            "name": "timestamp",
+            "type": "u64"
           }
         ]
       }

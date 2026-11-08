@@ -120,8 +120,8 @@ pub struct InitializeVaultArgs {
     /// `Vault.sink_capacity` — how many sink slots may be claimed, up to
     /// `MAX_SINKS`. `0` leaves seized-collateral custody disabled.
     pub sink_capacity: u8,
-    #[codama(type = struct(field("len", number(u8)), field("value", fixed_size(string, 25))))]
-    pub metadata_name: PodString<25>,
+    #[codama(type = struct(field("len", number(u8)), field("value", fixed_size(string, 50))))]
+    pub metadata_name: PodString<50>,
     #[codama(type = struct(field("len", number(u8)), field("value", fixed_size(string, 5))))]
     pub metadata_symbol: PodString<5>,
     #[codama(type = struct(field("len", number(u8)), field("value", fixed_size(string, 200))))]

@@ -497,7 +497,8 @@ pub struct Config {
     pub disable_repayment: u8,
     pub _padding2: [u8; 2],
     pub operator: Address,
-    pub _reserved: [u8; 368],
+    pub gated_collections: [Address; 4],
+    pub _reserved: [u8; 240],
 }
 
 impl Config {
@@ -876,9 +877,15 @@ pub struct LoanEventV2 {
     pub loan_type: LoanType,
     pub extendable: u8,
     pub extension_count: u8,
-    /// Principal paid down ahead of settlement. `principal_amount` stays the
-    /// amount originally disbursed, so a consumer wanting what is still owed
-    /// must read `principal_amount - repaid_principal + interest`.
+    /// Principal paid down ahead of settlement in the current period. What is
+    /// still owed is `principal_amount - repaid_principal + interest`.
+    ///
+    /// Per-period, not lifetime: `principal_amount`, `repaid_principal`,
+    /// `collateral_amount` and `interest` are all rebased at each extension
+    /// (`LoanExtendedV2`), which folds the paydown into `principal_amount` and
+    /// resets this field to 0. A consumer tracking the original disbursement or
+    /// cumulative repayment must keep it from `LoanCreatedV2` and by summing
+    /// `LoanPartiallyRepaid.amount`, not read it off the snapshot.
     pub repaid_principal: u64,
 }
 
@@ -916,12 +923,37 @@ impl LoanExtendedV2 {
     pub const DISCRIMINATOR: [u8; 8] = [169, 169, 38, 187, 199, 247, 102, 11];
 }
 
+/// `extend_loan`: `LoanExtendedV2` plus what the roll moved. `loan` is the
+/// loan after the roll, so these amounts are otherwise only recoverable by
+/// re-running the extension pricing against the loan as it stood before, or
+/// by pairing the transaction's `EscrowDeposit` / `ProtocolFee` events (which
+/// are skipped when nothing is due). Informational: nothing reads them back.
+#[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
+pub struct LoanExtendedV3 {
+    pub loan: LoanEventV2,
+    pub pubkey: Address,
+    /// Interest settled for the period that closed, paid by the borrower to
+    /// the lender, before the repay fee comes out of it.
+    pub interest_due: u64,
+    /// Repay-side protocol fee, taken out of `interest_due`.
+    pub repay_fee: u64,
+    /// Origination fee for the period that opened, paid by the borrower.
+    pub origination_fee: u64,
+}
+
+impl LoanExtendedV3 {
+    /// Event discriminator.
+    pub const DISCRIMINATOR: [u8; 8] = [91, 8, 174, 242, 55, 219, 184, 163];
+}
+
 /// A principal paydown that left the loan open.
 ///
 /// Carries the same `LoanEventV2` snapshot as the rest of the loan lifecycle, so
 /// a consumer can treat every loan event uniformly, plus the two figures a
-/// snapshot cannot express: what moved in *this* payment. Cumulative state lives
-/// on the snapshot as `repaid_principal`.
+/// snapshot cannot express: what moved in *this* payment. The snapshot's
+/// `repaid_principal` is cumulative only within the current period: an
+/// extension resets it to 0, so lifetime repayment is the sum of `amount` over
+/// these events.
 #[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
 pub struct LoanPartiallyRepaid {
     pub loan: LoanEventV2,
@@ -1464,6 +1496,8 @@ pub enum UpdateConfigAction {
     SetMaxDuration { max_duration: u32 },
     SetMaxExpiry { max_expiry: u32 },
     SetOperator { operator: Address },
+    AddGatedCollection { collection: Address },
+    RemoveGatedCollection { collection: Address },
 }
 
 #[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
@@ -1487,7 +1521,12 @@ pub struct User {
     pub bump: u8,
     pub flags: u8,
     pub _padding: [u8; 6],
-    pub _reserved: [u8; 64],
+    pub yield_operator: Address,
+    pub origination_fee_bps: u16,
+    pub repay_fee_bps: u16,
+    pub liquidation_fee_bps: u16,
+    pub _padding2: [u8; 2],
+    pub _reserved: [u8; 24],
 }
 
 impl User {
@@ -1502,6 +1541,32 @@ impl User {
         let payload = data.strip_prefix(Self::DISCRIMINATOR.as_slice())?;
         wincode::config::deserialize(payload, crate::BorshConfig::new()).ok()
     }
+}
+
+/// Fee rates for one user, each applied to the fees that user pays: the
+/// origination fee (in `Config` terms `interest_fee_bps`) when they borrow,
+/// the repay and liquidation fees when they lend. Same units and bounds as the
+/// config rates they replace.
+#[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
+pub struct UserFeeProfile {
+    pub origination_fee_bps: u16,
+    pub repay_fee_bps: u16,
+    pub liquidation_fee_bps: u16,
+}
+
+/// The admin set (`Some`) or cleared (`None`) a user's fee profile. While one
+/// is set, the fees this user pays are billed at its rates instead of the
+/// config's.
+#[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
+pub struct UserFeeProfileUpdated {
+    pub user: Address,
+    pub profile: Option<UserFeeProfile>,
+    pub timestamp: u64,
+}
+
+impl UserFeeProfileUpdated {
+    /// Event discriminator.
+    pub const DISCRIMINATOR: [u8; 8] = [73, 251, 11, 192, 89, 239, 98, 37];
 }
 
 #[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
@@ -1570,4 +1635,17 @@ pub struct YieldMarketParams {
     pub rewards_rate_model: Address,
     pub vault: Address,
     pub liquidity: Address,
+}
+
+/// `operator` is Pubkey::default() when cleared.
+#[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
+pub struct YieldOperatorUpdated {
+    pub user: Address,
+    pub operator: Address,
+    pub timestamp: u64,
+}
+
+impl YieldOperatorUpdated {
+    /// Event discriminator.
+    pub const DISCRIMINATOR: [u8; 8] = [96, 44, 186, 62, 149, 138, 12, 255];
 }

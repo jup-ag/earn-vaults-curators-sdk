@@ -78,6 +78,7 @@ pub struct InitializeVault<'a> {
     /// seized-collateral custody disabled — an unlisted in-flow then reverts
     /// rather than provisioning a delegate-attested AUM row.
     pub sink_capacity: u8,
+    /// Token name (max 50 bytes).
     pub metadata_name: &'a str,
     pub metadata_symbol: &'a str,
     pub metadata_uri: &'a str,
@@ -228,7 +229,7 @@ impl InitializeVault<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use {super::*, wincode::Deserialize};
 
     fn address(byte: u8) -> Address {
         Address::new_from_array([byte; 32])
@@ -372,5 +373,34 @@ mod tests {
         assert_eq!(ix.accounts[10].pubkey, address(4));
         assert!(!ix.accounts[9].is_writable);
         assert!(!ix.accounts[10].is_writable);
+    }
+
+    #[test]
+    fn bounds_metadata_name_at_50_bytes() {
+        for name in [
+            "Bitwise JupLend Optimizer Vault".to_string(),
+            "N".repeat(50),
+            "é".repeat(25),
+            "N".repeat(51),
+            "é".repeat(26),
+        ] {
+            let result = InitializeVault {
+                metadata_name: &name,
+                ..fixture()
+            }
+            .into_instruction();
+            if name.len() > 50 {
+                assert!(result.is_err());
+                continue;
+            }
+            let ix = result.unwrap();
+            assert!(VaultInstruction::deserialize(&ix.data[..ix.data.len() - 25]).is_err());
+            let VaultInstruction::InitializeVault { args } =
+                VaultInstruction::deserialize(&ix.data).unwrap()
+            else {
+                panic!("expected vault initialization");
+            };
+            assert_eq!(args.metadata_name.as_str(), name);
+        }
     }
 }
