@@ -14,7 +14,7 @@ use {
 };
 
 /// Curator-only update of the share mint's Token-2022 metadata. `None` fields
-/// are left untouched. Limits: name 25, symbol 5, uri 200 bytes.
+/// are left untouched. Limits: name 50, symbol 5, uri 200 bytes.
 pub struct UpdateShareMeta<'a> {
     pub curator: Address,
     pub vault: Address,
@@ -54,7 +54,7 @@ impl UpdateShareMeta<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use {super::*, wincode::Deserialize};
 
     #[test]
     fn builds_instruction() {
@@ -72,15 +72,37 @@ mod tests {
         assert!(ix.accounts[0].is_signer);
         assert!(ix.accounts[0].is_writable); // curator funds the realloc rent top-up
         assert!(ix.accounts[3].is_writable); // share mint takes the metadata write
+    }
 
-        let too_long = UpdateShareMeta {
-            curator: Address::new_from_array([1; 32]),
-            vault: Address::new_from_array([2; 32]),
-            name: Some("this name is way past the 25-byte cap"),
-            symbol: None,
-            uri: None,
+    #[test]
+    fn bounds_metadata_name_at_50_bytes() {
+        for name in [
+            "Bitwise JupLend Optimizer Vault".to_string(),
+            "N".repeat(50),
+            "é".repeat(25),
+            "N".repeat(51),
+            "é".repeat(26),
+        ] {
+            let result = UpdateShareMeta {
+                curator: Address::new_from_array([1; 32]),
+                vault: Address::new_from_array([2; 32]),
+                name: Some(&name),
+                symbol: None,
+                uri: None,
+            }
+            .into_instruction();
+            if name.len() > 50 {
+                assert!(result.is_err());
+                continue;
+            }
+            let ix = result.unwrap();
+            assert!(VaultInstruction::deserialize(&ix.data[..ix.data.len() - 25]).is_err());
+            let VaultInstruction::UpdateShareMeta { args } =
+                VaultInstruction::deserialize(&ix.data).unwrap()
+            else {
+                panic!("expected metadata update");
+            };
+            assert_eq!(args.metadata_name.get().unwrap().as_str(), name);
         }
-        .into_instruction();
-        assert!(too_long.is_err());
     }
 }

@@ -3717,7 +3717,7 @@
                     "name": "value",
                     "type": {
                       "kind": "fixedSizeTypeNode",
-                      "size": 25,
+                      "size": 50,
                       "type": {
                         "kind": "stringTypeNode",
                         "encoding": "utf8"
@@ -3889,7 +3889,7 @@
                       "name": "value",
                       "type": {
                         "kind": "fixedSizeTypeNode",
-                        "size": 25,
+                        "size": 50,
                         "type": {
                           "kind": "stringTypeNode",
                           "encoding": "utf8"

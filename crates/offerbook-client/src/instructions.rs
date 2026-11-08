@@ -1359,8 +1359,12 @@ pub struct EscrowYieldWithdrawAccounts {
     pub mint: Address,
     pub jl_mint: Address,
     pub user_escrow_token_account: Address,
+    /// Created if missing, as on deposit: a user who opted in but was never
+    /// cranked has no share account yet, and the documented no-op must not
+    /// revert for them (audit I-02).
     pub user_jl_token_account: Address,
-    /// enforced by the seeds below, created via CPI on first use
+    /// enforced by the seeds below. Only its address is needed: Earn pays out
+    /// directly and never writes to it, so it is never created.
     pub claim_account: Address,
     pub lending_admin: Address,
     pub lending: Address,
@@ -1462,8 +1466,12 @@ pub struct EscrowYieldWithdrawAllAccounts {
     pub mint: Address,
     pub jl_mint: Address,
     pub user_escrow_token_account: Address,
+    /// Created if missing, as on deposit: a user who opted in but was never
+    /// cranked has no share account yet, and the documented no-op must not
+    /// revert for them (audit I-02).
     pub user_jl_token_account: Address,
-    /// enforced by the seeds below, created via CPI on first use
+    /// enforced by the seeds below. Only its address is needed: Earn pays out
+    /// directly and never writes to it, so it is never created.
     pub claim_account: Address,
     pub lending_admin: Address,
     pub lending: Address,
@@ -1567,6 +1575,18 @@ pub struct ExtendLoanAccounts {
     pub lender_principal_escrow: Address,
     pub protocol_fee_token_account: Address,
     pub principal_token_program: Address,
+    /// Collateral accounts, needed only to release surplus collateral after a
+    /// paydown (audit L-04). Validated in the handler against the loan.
+    pub collateral_mint: Option<Address>,
+    pub loan_vault: Option<Address>,
+    /// The borrower's collateral escrow, `ATA(signer_user, collateral_mint)`,
+    /// where a partial repayment also releases collateral.
+    pub borrower_collateral_escrow: Option<Address>,
+    pub collateral_token_program: Option<Address>,
+    /// The collateral asset of a Core NFT loan, required for every one of them:
+    /// the asset alone says whether its collection is custody-gated (audit
+    /// round 2 M-01). Left out for any other collateral.
+    pub core_asset: Option<Address>,
     pub event_authority: Address,
     pub program: Address,
 }
@@ -1589,6 +1609,17 @@ impl ExtendLoanAccounts {
             AccountMeta::new(self.lender_principal_escrow, false),
             AccountMeta::new(self.protocol_fee_token_account, false),
             AccountMeta::new_readonly(self.principal_token_program, false),
+            AccountMeta::new_readonly(self.collateral_mint.unwrap_or(ID), false),
+            match self.loan_vault {
+                Some(address) => AccountMeta::new(address, false),
+                None => AccountMeta::new_readonly(ID, false),
+            },
+            match self.borrower_collateral_escrow {
+                Some(address) => AccountMeta::new(address, false),
+                None => AccountMeta::new_readonly(ID, false),
+            },
+            AccountMeta::new_readonly(self.collateral_token_program.unwrap_or(ID), false),
+            AccountMeta::new_readonly(self.core_asset.unwrap_or(ID), false),
             AccountMeta::new_readonly(self.event_authority, false),
             AccountMeta::new_readonly(self.program, false),
         ]
@@ -2031,8 +2062,8 @@ impl Init {
     }
 }
 
-/// `amount: None` settles the loan; `Some(x)` pays down `x` of the principal
-/// and leaves it running, with the collateral still locked.
+/// Settles the loan in full. `amount` must be `None`: NFT collateral is
+/// indivisible, so a principal paydown is rejected with `InvalidRepayAmount`.
 /// Accounts for the `repay_non_fungible_loan` instruction.
 #[derive(Debug, Clone)]
 pub struct RepayNonFungibleLoanAccounts {
@@ -2084,16 +2115,16 @@ impl RepayNonFungibleLoanAccounts {
     }
 }
 
-/// `amount: None` settles the loan; `Some(x)` pays down `x` of the principal
-/// and leaves it running, with the collateral still locked.
+/// Settles the loan in full. `amount` must be `None`: NFT collateral is
+/// indivisible, so a principal paydown is rejected with `InvalidRepayAmount`.
 /// Arguments for the `repay_non_fungible_loan` instruction.
 #[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
 pub struct RepayNonFungibleLoanInstructionArgs {
     pub amount: Option<u64>,
 }
 
-/// `amount: None` settles the loan; `Some(x)` pays down `x` of the principal
-/// and leaves it running, with the collateral still locked.
+/// Settles the loan in full. `amount` must be `None`: NFT collateral is
+/// indivisible, so a principal paydown is rejected with `InvalidRepayAmount`.
 /// Builder for the `repay_non_fungible_loan` instruction.
 pub struct RepayNonFungibleLoan;
 
@@ -2267,6 +2298,68 @@ impl SetLoanExtendable {
     }
 }
 
+/// `None` clears the profile: the user pays the config rates again.
+/// Accounts for the `set_user_fee_profile` instruction.
+#[derive(Debug, Clone)]
+pub struct SetUserFeeProfileAccounts {
+    pub admin: Address,
+    pub config: Address,
+    pub user: Address,
+    pub event_authority: Address,
+    pub program: Address,
+}
+
+impl SetUserFeeProfileAccounts {
+    /// Build the account metas in the order expected by the program.
+    ///
+    /// Optional accounts default to the program ID when `None`, matching
+    /// the Anchor convention.
+    pub fn to_account_metas(&self) -> Vec<AccountMeta> {
+        vec![
+            AccountMeta::new_readonly(self.admin, true),
+            AccountMeta::new_readonly(self.config, false),
+            AccountMeta::new(self.user, false),
+            AccountMeta::new_readonly(self.event_authority, false),
+            AccountMeta::new_readonly(self.program, false),
+        ]
+    }
+}
+
+/// `None` clears the profile: the user pays the config rates again.
+/// Arguments for the `set_user_fee_profile` instruction.
+#[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
+pub struct SetUserFeeProfileInstructionArgs {
+    pub profile: Option<crate::state::UserFeeProfile>,
+}
+
+/// `None` clears the profile: the user pays the config rates again.
+/// Builder for the `set_user_fee_profile` instruction.
+pub struct SetUserFeeProfile;
+
+impl SetUserFeeProfile {
+    /// Instruction discriminator.
+    pub const DISCRIMINATOR: [u8; 8] = [90, 172, 10, 30, 15, 79, 62, 94];
+
+    /// Serialize the instruction data (discriminator + borsh-layout args).
+    pub fn data(args: &SetUserFeeProfileInstructionArgs) -> Vec<u8> {
+        let mut data = Self::DISCRIMINATOR.to_vec();
+        data.extend_from_slice(&crate::serialize(args).expect("args serialization is infallible"));
+        data
+    }
+
+    /// Build the instruction.
+    pub fn instruction(
+        accounts: &SetUserFeeProfileAccounts,
+        args: &SetUserFeeProfileInstructionArgs,
+    ) -> Instruction {
+        Instruction {
+            program_id: ID,
+            accounts: accounts.to_account_metas(),
+            data: Self::data(args),
+        }
+    }
+}
+
 /// Accounts for the `set_yield_enabled` instruction.
 #[derive(Debug, Clone)]
 pub struct SetYieldEnabledAccounts {
@@ -2315,6 +2408,63 @@ impl SetYieldEnabled {
     pub fn instruction(
         accounts: &SetYieldEnabledAccounts,
         args: &SetYieldEnabledInstructionArgs,
+    ) -> Instruction {
+        Instruction {
+            program_id: ID,
+            accounts: accounts.to_account_metas(),
+            data: Self::data(args),
+        }
+    }
+}
+
+/// Accounts for the `set_yield_operator` instruction.
+#[derive(Debug, Clone)]
+pub struct SetYieldOperatorAccounts {
+    pub signer: Address,
+    pub signer_user: Address,
+    pub event_authority: Address,
+    pub program: Address,
+}
+
+impl SetYieldOperatorAccounts {
+    /// Build the account metas in the order expected by the program.
+    ///
+    /// Optional accounts default to the program ID when `None`, matching
+    /// the Anchor convention.
+    pub fn to_account_metas(&self) -> Vec<AccountMeta> {
+        vec![
+            AccountMeta::new_readonly(self.signer, true),
+            AccountMeta::new(self.signer_user, false),
+            AccountMeta::new_readonly(self.event_authority, false),
+            AccountMeta::new_readonly(self.program, false),
+        ]
+    }
+}
+
+/// Arguments for the `set_yield_operator` instruction.
+#[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
+pub struct SetYieldOperatorInstructionArgs {
+    pub operator: Option<Address>,
+}
+
+/// Builder for the `set_yield_operator` instruction.
+pub struct SetYieldOperator;
+
+impl SetYieldOperator {
+    /// Instruction discriminator.
+    pub const DISCRIMINATOR: [u8; 8] = [191, 2, 217, 79, 34, 85, 48, 82];
+
+    /// Serialize the instruction data (discriminator + borsh-layout args).
+    pub fn data(args: &SetYieldOperatorInstructionArgs) -> Vec<u8> {
+        let mut data = Self::DISCRIMINATOR.to_vec();
+        data.extend_from_slice(&crate::serialize(args).expect("args serialization is infallible"));
+        data
+    }
+
+    /// Build the instruction.
+    pub fn instruction(
+        accounts: &SetYieldOperatorAccounts,
+        args: &SetYieldOperatorInstructionArgs,
     ) -> Instruction {
         Instruction {
             program_id: ID,

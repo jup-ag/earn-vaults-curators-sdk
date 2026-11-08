@@ -19,7 +19,7 @@ use {
     solana_hash::Hash,
     solana_instruction::{AccountMeta, Instruction},
     solana_keypair::{Keypair, read_keypair_file},
-    solana_message::{AddressLookupTableAccount, VersionedMessage, v0},
+    solana_message::{AddressLookupTableAccount, VersionedMessage, v0, v1},
     solana_signer::Signer,
     solana_transaction::versioned::VersionedTransaction,
     std::{
@@ -77,8 +77,8 @@ static PRIORITY_FEE: AtomicU64 = AtomicU64::new(0);
 static COMPUTE_LIMIT: AtomicU32 = AtomicU32::new(0);
 
 /// `priority_fee`: micro-lamports per compute unit. `compute_limit`: explicit
-/// CU ceiling. Either at 0 omits its instruction, leaving the runtime defaults
-/// (no priority fee, 200k CU per instruction).
+/// CU ceiling. Zero selects no priority fee and 200k CU per instruction
+/// (capped at 1.4M).
 pub fn set_fees(priority_fee: u64, compute_limit: u32) {
     PRIORITY_FEE.store(priority_fee, Ordering::Relaxed);
     COMPUTE_LIMIT.store(compute_limit, Ordering::Relaxed);
@@ -173,13 +173,12 @@ pub fn fetch_luts(url: &str, keys: &[Address]) -> Result<Vec<AddressLookupTableA
         .collect()
 }
 
+/// Sign and send a v1 transaction, waiting for confirmation. Routes using
+/// lookup tables retain v0 because v1 does not support lookup tables.
+///
 /// `skip_preflight`: for oracle-freshness-critical txs the preflight is a
 /// liability — it may simulate on a pool node whose confirmed bank hasn't seen
 /// the keeper's latest post, rejecting a tx the leader would accept.
-/// Sign and send a **v0** transaction, waiting for confirmation. Any configured
-/// compute-budget instructions are prepended; `luts` are the lookup tables to
-/// compress account keys against (empty is a normal v0 tx with no lookups —
-/// there is no legacy path, v0 is universally accepted).
 pub fn send_opts(
     url: &str,
     ixs: &[Instruction],
@@ -189,14 +188,15 @@ pub fn send_opts(
 ) -> Result<String> {
     let luts = fetch_luts(url, luts)?;
     let hash = latest_blockhash(url)?;
-    let mut all = compute_budget_ixs(
+    let msg = compile_message(
+        &signers[0].pubkey(),
+        ixs,
+        &luts,
+        hash,
         PRIORITY_FEE.load(Ordering::Relaxed),
         COMPUTE_LIMIT.load(Ordering::Relaxed),
-    );
-    all.extend_from_slice(ixs);
-    let msg = v0::Message::try_compile(&signers[0].pubkey(), &all, &luts, hash)
-        .map_err(|e| anyhow!("compile v0 message: {e}"))?;
-    let tx = VersionedTransaction::try_new(VersionedMessage::V0(msg), signers)
+    )?;
+    let tx = VersionedTransaction::try_new(msg, signers)
         .map_err(|e| anyhow!("sign transaction: {e}"))?;
     let bytes = wincode::serialize(&tx)?;
     // preflightCommitment must match the commitment the blockhash was fetched
@@ -215,6 +215,38 @@ pub fn send_opts(
     // InvalidAccountOwner).
     confirm(url, &sig)?;
     Ok(sig)
+}
+
+fn compile_message(
+    payer: &Address,
+    ixs: &[Instruction],
+    luts: &[AddressLookupTableAccount],
+    hash: Hash,
+    priority_fee: u64,
+    compute_limit: u32,
+) -> Result<VersionedMessage> {
+    if !luts.is_empty() {
+        let mut all = compute_budget_ixs(priority_fee, compute_limit);
+        all.extend_from_slice(ixs);
+        return v0::Message::try_compile(payer, &all, luts, hash)
+            .map(VersionedMessage::V0)
+            .map_err(|e| anyhow!("compile v0 message: {e}"));
+    }
+
+    let compute_limit = if compute_limit == 0 {
+        (ixs.len().min(7) as u32) * 200_000
+    } else {
+        compute_limit.min(1_400_000)
+    };
+    // The CLI accepts micro-lamports/CU; v1 stores a total fee in lamports.
+    let fee = (u128::from(priority_fee) * u128::from(compute_limit)).div_ceil(1_000_000);
+    let config = v1::TransactionConfig::empty()
+        .with_compute_unit_limit(compute_limit)
+        .with_loaded_accounts_data_size_limit(64 * 1024 * 1024)
+        .with_priority_fee(u64::try_from(fee).map_err(|_| anyhow!("priority fee exceeds u64"))?);
+    v1::Message::try_compile_with_config(payer, ixs, hash, config)
+        .map(VersionedMessage::V1)
+        .map_err(|e| anyhow!("compile v1 message: {e}"))
 }
 
 /// Poll `getSignatureStatuses` until the tx is confirmed (or errored/timed out).
@@ -612,6 +644,60 @@ mod tests {
         );
     }
 
+    #[test]
+    fn v1_config_preserves_limits_and_priority_fee_units() {
+        let payer = Keypair::new();
+        let ix = Instruction {
+            program_id: Address::new_from_array([2; 32]),
+            accounts: vec![],
+            data: vec![7; 32],
+        };
+        for (count, price, requested_limit, expected_limit, expected_fee) in [
+            (1, 0, 0, 200_000, 0),
+            (3, 5_000, 0, 600_000, 3_000),
+            (8, 1, 0, 1_400_000, 2),
+            (1, 5_000, 400_000, 400_000, 2_000),
+            (1, 5_000, u32::MAX, 1_400_000, 7_000),
+        ] {
+            let ixs = vec![ix.clone(); count];
+            let message = compile_message(
+                &payer.pubkey(),
+                &ixs,
+                &[],
+                Hash::default(),
+                price,
+                requested_limit,
+            )
+            .unwrap();
+            let VersionedMessage::V1(ref v1) = message else {
+                panic!("transactions without lookup tables must use v1");
+            };
+            assert_eq!(v1.config.compute_unit_limit, Some(expected_limit));
+            assert_eq!(
+                v1.config.loaded_accounts_data_size_limit,
+                Some(64 * 1024 * 1024)
+            );
+            assert_eq!(v1.config.priority_fee, Some(expected_fee));
+            assert_eq!(v1.instructions.len(), count);
+            let tx = VersionedTransaction::try_new(message, &[&payer]).unwrap();
+            let bytes = wincode::serialize(&tx).unwrap();
+            assert_eq!(bytes[0], v1::V1_PREFIX);
+            let decoded: VersionedTransaction = wincode::deserialize(&bytes).unwrap();
+            assert_eq!(decoded, tx);
+        }
+        assert!(
+            compile_message(
+                &payer.pubkey(),
+                &[ix],
+                &[],
+                Hash::default(),
+                u64::MAX,
+                1_400_000,
+            )
+            .is_err()
+        );
+    }
+
     /// Lookup-table decode: addresses start after a fixed 56-byte header, so an
     /// off-by-one here silently yields garbage keys that `try_compile` would
     /// then fail to match — leaving a route uncompressed and over the size cap.
@@ -686,8 +772,19 @@ mod tests {
             Hash::new_from_array(hash),
         )
         .unwrap();
-        let with_lut =
-            v0::Message::try_compile(&payer, &[ix], &[lut], Hash::new_from_array(hash)).unwrap();
+        let VersionedMessage::V0(with_lut) = compile_message(
+            &payer,
+            &[ix],
+            &[lut],
+            Hash::new_from_array(hash),
+            5_000,
+            400_000,
+        )
+        .unwrap() else {
+            panic!("lookup-table routes must retain v0");
+        };
+        assert_eq!(with_lut.instructions[0].data[0], 2);
+        assert_eq!(with_lut.instructions[1].data[0], 3);
 
         assert!(
             with_lut.serialize().len() < bare.serialize().len(),

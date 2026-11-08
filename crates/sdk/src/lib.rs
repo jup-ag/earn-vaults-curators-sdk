@@ -3,6 +3,7 @@ use {earn_vaults_interface::encoding::ZeroPodError, thiserror::Error};
 
 pub mod instructions;
 pub mod nav;
+pub mod offerbook;
 pub mod pda;
 
 #[derive(Error, Debug)]

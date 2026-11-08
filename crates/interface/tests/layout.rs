@@ -88,7 +88,7 @@ fn borrowed_instructions_validate_active_fixed_fields() {
         metadata_uri: PodOption::none(),
     };
     let mut bytes = wincode::serialize(&VaultInstruction::UpdateShareMeta { args: &args }).unwrap();
-    assert_eq!(bytes.len(), 237);
+    assert_eq!(bytes.len(), 262);
     assert_eq!(&bytes[..7], b"\x15\x01\x04Fund");
     bytes[10] = 0xff; // Unused padding remains accepted, as in main.
     assert!(VaultInstruction::deserialize(&bytes).is_ok());
@@ -96,7 +96,7 @@ fn borrowed_instructions_validate_active_fixed_fields() {
     assert!(VaultInstruction::deserialize(&bytes).is_err());
     bytes[1] = 1;
     bytes[10] = 0; // Isolate the length bound from UTF-8 validation.
-    bytes[2] = 26;
+    bytes[2] = 51;
     assert!(VaultInstruction::deserialize(&bytes).is_err());
     bytes[2] = 4;
     bytes[3] = 0xff;

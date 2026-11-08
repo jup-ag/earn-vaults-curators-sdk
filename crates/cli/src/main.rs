@@ -29,6 +29,7 @@ use {
             ProtocolCpi, Redeem, RedeemDirect, RefreshPrices, SetProtocolPolicy, SubscribeDirect,
             SweepIdle, UpdateShareMeta, UpdateVault, ValidateAum,
         },
+        offerbook,
         pda::{
             derive_associated_token_account, derive_share_mint, derive_vault,
             derive_vault_authority,
@@ -83,9 +84,9 @@ struct Cli {
     /// load.
     #[arg(long, default_value_t = 0, global = true)]
     priority_fee: u64,
-    /// Explicit compute-unit ceiling (0 = the runtime default, 200k per
-    /// instruction). Raise it for a `protocol-cpi` whose routed CPI is deep, or
-    /// for a `subscribe` that bundles `validate-aum` over several legs.
+    /// Explicit compute-unit ceiling (0 = 200k per instruction, capped at 1.4M).
+    /// Raise it for a `protocol-cpi` whose routed CPI is deep, or for a
+    /// `subscribe` that bundles `validate-aum` over several legs.
     #[arg(long, default_value_t = 0, global = true)]
     compute_limit: u32,
     #[command(subcommand)]
@@ -489,7 +490,7 @@ enum Cmd {
     UpdateShareMeta {
         #[arg(long)]
         curator: PathBuf,
-        /// Token name (max 25 bytes).
+        /// Token name (max 50 bytes).
         #[arg(long)]
         name: Option<String>,
         /// Token symbol (max 5 bytes).
@@ -544,8 +545,8 @@ enum Cmd {
         create_ata: Vec<String>,
         /// Address lookup table to compress account keys against, repeatable.
         /// Jupiter's /swap-instructions returns these as
-        /// `addressLookupTableAddresses` — pass every one, or a real route's key
-        /// list overruns the 1232-byte transaction limit.
+        /// `addressLookupTableAddresses`. Supplying --lut selects v0;
+        /// omit it to use v1 with inline account keys.
         #[arg(long = "lut", value_name = "ADDRESS")]
         luts: Vec<String>,
     },
@@ -610,6 +611,39 @@ enum Cmd {
     Fluid {
         #[command(subcommand)]
         ix: FluidIx,
+    },
+    /// Build an Offerbook route file for `protocol-cpi`, deriving every account
+    /// for the state file's vault. See `earn-vaults offerbook --help`.
+    Offerbook {
+        #[command(subcommand)]
+        ix: OfferbookIx,
+    },
+}
+
+/// Offerbook sub-instructions (audit-2026-11 ABI). Each writes the route JSON,
+/// including any trailing vault policy accounts, to `--out` (or stdout).
+#[derive(Subcommand)]
+enum OfferbookIx {
+    /// `set_yield_operator`: name the key that may top up and compound the
+    /// vault's Offerbook escrow yield alongside the vault and Offerbook's own
+    /// operator, or `none` to clear it. Naming needs the delegate's `YIELD`
+    /// bit, clearing `ESCROW`. The key keeps that power after the delegate's
+    /// grant is revoked: clear it as part of revoking.
+    SetYieldOperator {
+        /// Base58 pubkey, or `none`.
+        #[arg(long)]
+        operator: String,
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+    /// `extend_loan` as borrower: reads the loan and Offerbook's config over
+    /// RPC, then builds the 18-account layout with the collateral accounts that
+    /// release a paydown's surplus collateral to the vault's escrow. Needs `BORROW`.
+    ExtendLoan {
+        #[arg(long)]
+        loan: String,
+        #[arg(long)]
+        out: Option<PathBuf>,
     },
 }
 
@@ -1187,6 +1221,7 @@ fn dispatch(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
         command @ Cmd::CancelRedeem { .. } => run_cancel_redeem(ctx, command),
         command @ Cmd::AcceptCurator { .. } => run_accept_curator(ctx, command),
         command @ Cmd::Fluid { .. } => run_fluid(command),
+        command @ Cmd::Offerbook { .. } => run_offerbook(ctx, command),
     }
 }
 
@@ -2256,6 +2291,97 @@ fn run_fluid(command: Cmd) -> Result<()> {
     Ok(())
 }
 
+fn run_offerbook(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
+    let Cmd::Offerbook { ix } = command else {
+        unreachable!("dispatch passed the wrong command to run_offerbook")
+    };
+    let vault = addr(&load_state(ctx.state_path)?.vault)?;
+    // The route carries only the inner CPI; `protocol-cpi` adds the delegate.
+    let signer = Address::default();
+    let (cpi, out) = match ix {
+        OfferbookIx::SetYieldOperator { operator, out } => {
+            let operator = match operator.as_str() {
+                "none" => None,
+                key => Some(addr(key)?),
+            };
+            (
+                offerbook::SetYieldOperator {
+                    signer,
+                    vault,
+                    operator,
+                }
+                .protocol_cpi(),
+                out,
+            )
+        }
+        OfferbookIx::ExtendLoan { loan, out } => {
+            let loan = addr(&loan)?;
+            let data = account_data(ctx.url, &loan)?;
+            let config = account_data(ctx.url, &offerbook::derive_config())?;
+            let key = |data: &[u8], offset: usize| -> Result<Address> {
+                let bytes: [u8; 32] = data
+                    .get(offset..offset + 32)
+                    .and_then(|b| b.try_into().ok())
+                    .ok_or_else(|| anyhow!("account too short for a key at {offset}"))?;
+                Ok(Address::new_from_array(bytes))
+            };
+            let cpi = offerbook::ExtendLoan {
+                signer,
+                vault,
+                loan,
+                lender: key(&data, offerbook::LOAN_LENDER_OFFSET)?,
+                principal_mint: key(&data, offerbook::LOAN_PRINCIPAL_MINT_OFFSET)?,
+                principal_token_program: key(
+                    &data,
+                    offerbook::LOAN_PRINCIPAL_TOKEN_PROGRAM_OFFSET,
+                )?,
+                collateral_mint: key(&data, offerbook::LOAN_COLLATERAL_MINT_OFFSET)?,
+                collateral_token_program: key(
+                    &data,
+                    offerbook::LOAN_COLLATERAL_TOKEN_PROGRAM_OFFSET,
+                )?,
+                fee_authority: key(&config, offerbook::CONFIG_FEE_AUTHORITY_OFFSET)?,
+            }
+            .protocol_cpi();
+            (cpi, out)
+        }
+    };
+    write_route(&out, route_json(&cpi))
+}
+
+/// The `protocol-cpi` route JSON of a built `ProtocolCpi`'s inner call.
+fn route_json(cpi: &ProtocolCpi) -> Value {
+    let accounts: Vec<Value> = cpi
+        .forwarded
+        .iter()
+        .map(|m| {
+            json!({
+                "pubkey": m.pubkey.to_string(),
+                "is_signer": m.is_signer,
+                "is_writable": m.is_writable,
+            })
+        })
+        .collect();
+    json!({
+        "target_program": cpi.target_program.to_string(),
+        "data_base64": B64.encode(&cpi.cpi_data),
+        "accounts": accounts,
+    })
+}
+
+/// Raw data of an existing account.
+fn account_data(url: &str, address: &Address) -> Result<Vec<u8>> {
+    let v = rpc(
+        url,
+        "getAccountInfo",
+        json!([address.to_string(), {"encoding": "base64", "commitment": "confirmed"}]),
+    )?;
+    let data = v["value"]["data"][0]
+        .as_str()
+        .ok_or_else(|| anyhow!("account {address} not found"))?;
+    Ok(B64.decode(data)?)
+}
+
 #[derive(Deserialize)]
 struct Route {
     target_program: String,
@@ -2795,6 +2921,45 @@ mod tests {
         };
         assert_eq!(signer, PathBuf::from("claimant.json"));
         assert_eq!(destination, "destination-token-account");
+    }
+
+    #[test]
+    fn offerbook_set_yield_operator_route_round_trips_through_protocol_cpi() {
+        let cli = Cli::try_parse_from([
+            "vault",
+            "offerbook",
+            "set-yield-operator",
+            "--operator",
+            "none",
+        ])
+        .unwrap();
+        let Cmd::Offerbook {
+            ix: OfferbookIx::SetYieldOperator { operator, out },
+        } = cli.cmd
+        else {
+            panic!("parsed the wrong command")
+        };
+        assert_eq!(operator, "none");
+        assert!(out.is_none());
+        let vault = Address::new_from_array([1; 32]);
+        let operator = Address::new_from_array([3; 32]);
+        let cpi = offerbook::SetYieldOperator {
+            signer: Address::default(),
+            vault,
+            operator: Some(operator),
+        }
+        .protocol_cpi();
+        let route: Route = serde_json::from_value(route_json(&cpi)).unwrap();
+        assert_eq!(route.target_program, offerbook::PROGRAM_ID.to_string());
+        let data = B64.decode(route.data_base64.as_bytes()).unwrap();
+        assert_eq!(&data[..8], &offerbook::IX_SET_YIELD_OPERATOR);
+        assert_eq!(&data[9..], operator.as_array());
+        assert_eq!(route.accounts.len(), 4);
+        assert_eq!(
+            route.accounts[0].pubkey,
+            derive_vault_authority(&vault).to_string()
+        );
+        assert!(route.accounts[1].is_writable && !route.accounts[0].is_signer);
     }
 
     #[test]
