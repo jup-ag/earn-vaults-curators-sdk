@@ -93,7 +93,7 @@ pub struct InitializeVaultArgs {
     /// global protocol performance fee remains additive.
     #[codama(type = number(u16))]
     pub performance_fee_bps: U16,
-    /// Exit fee on the instant (`RedeemDirect`) path. `None` leaves the path
+    /// Vault-retained fee on the instant (`RedeemDirect`) path. `None` leaves the path
     /// disabled; `Some(n)` enables it at `n` bps, which must sit inside
     /// `MIN_INSTANT_REDEEM_FEE_BPS..=MAX_INSTANT_REDEEM_FEE_BPS` — the floor is
     /// what keeps an instant exit from front-running a pending mark.
@@ -126,7 +126,7 @@ pub struct InitializeVaultArgs {
     pub metadata_symbol: PodString<5>,
     #[codama(type = struct(field("len", number(u8)), field("value", fixed_size(string, 200))))]
     pub metadata_uri: PodString<200>,
-    /// Curator fee on settled queued shares; 0 disables, capped at 1,000 bps.
+    /// Vault-retained fee on settled queued shares; 0 disables, capped at 1,000 bps.
     #[codama(type = number(u16))]
     pub queued_redeem_fee_bps: U16,
 }

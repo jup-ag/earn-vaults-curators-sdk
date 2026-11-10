@@ -1,7 +1,13 @@
 # offerbook-client
 
-Synced to [Offerbook `736d809`](https://github.com/jup-ag/offerbook-program/tree/736d809)
-(audit-2026-11), as used by earn-vaults-programs `4b20d51`.
+Regenerated from the supplied Offerbook IDL (2026-11-10), used alongside
+earn-vaults-programs `9b5f38c`. No Offerbook source commit was supplied with this IDL.
+
+Relative to the previous [Offerbook `736d809`](https://github.com/jup-ag/offerbook-program/tree/736d809)
+IDL, the five account types now declare Borsh serialization. Generated account
+encodings and instruction layouts are unchanged. The external Core types
+`BaseAssetV1`, `Key` and `UpdateAuthority` are no longer exported; use a separate
+Metaplex Core client to decode Core accounts.
 
 `idl.json` is the source for this generated client. From the repository root, regenerate it with:
 

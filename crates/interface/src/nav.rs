@@ -379,42 +379,23 @@ mod tests {
         );
     }
 
-    // `redeem_direct`'s accounting: gross priced like a queued redeem, fee cut
-    // from the payout, curator's shares minted against the post-redeem backing
-    // *before* the retained fee. The user pays exactly the fee, the curator's
-    // shares are worth it, and continuing holders are not diluted.
+    // Retaining the exit fee without minting shares transfers its backing to holders.
     #[test]
     fn instant_redeem_fee_conserves_value() {
         let (supply, aum) = (1_000_000_000u64, 1_000_000_000u64);
         let (redeemer, holder) = (400_000_000u64, 600_000_000u64);
-        let fee_bps = 100u128; // 1%
         let holder_before = assets_for_redeem(holder, supply, aum).unwrap();
-
         let gross = redeem_owed(redeemer, supply, 0, aum).unwrap();
-        let fee = ((gross as u128) * fee_bps / 10_000) as u64;
+        let fee = gross / 100;
         let net = gross - fee;
-
-        // The fee is already retained in `aum_post`, so take it back out of the
-        // mint denominator as if deposited on the curator's behalf.
         let (supply_post, aum_post) = (supply - redeemer, aum - net);
-        let fee_shares = shares_for_deposit(fee, supply_post, aum_post - fee).unwrap();
-        let (supply_final, _) = (supply_post + fee_shares, aum_post);
-
-        // User got gross minus exactly the fee.
-        assert_eq!(net, gross - fee);
-        // Worth the fee, modulo floor rounding — leaving the retained fee in
-        // the denominator under-prices these shares.
-        let curator_value = assets_for_redeem(fee_shares, supply_final, aum_post).unwrap();
-        assert!(curator_value <= fee);
+        assert_eq!(supply_post, holder);
+        assert_eq!(net + aum_post, aum);
+        assert_eq!(aum_post, holder_before + fee);
+        let holder_after = assets_for_redeem(holder, supply_post, aum_post).unwrap();
         assert!(
-            curator_value >= fee - 2,
-            "curator under-paid: {curator_value} vs fee {fee}"
-        );
-        // Remaining holders keep at least their pre-redeem value.
-        let holder_after = assets_for_redeem(holder, supply_final, aum_post).unwrap();
-        assert!(
-            holder_after >= holder_before.saturating_sub(1),
-            "instant redeem diluted continuing holders: {holder_before} -> {holder_after}"
+            holder_after >= holder_before + fee - 10,
+            "virtual-offset dust only"
         );
     }
 

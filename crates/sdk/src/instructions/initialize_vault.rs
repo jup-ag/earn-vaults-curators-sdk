@@ -55,11 +55,11 @@ pub struct InitializeVault<'a> {
     /// `MAX_PERFORMANCE_FEE_BPS`. `0` disables the curator component; the
     /// global protocol performance fee remains additive.
     pub performance_fee_bps: u16,
-    /// Exit fee on the instant (`RedeemDirect`) path. `None` leaves the path
+    /// Vault-retained fee on the instant (`RedeemDirect`) path. `None` leaves the path
     /// disabled; `Some(n)` enables it at `n` bps, which must sit inside
     /// `MIN_INSTANT_REDEEM_FEE_BPS..=MAX_INSTANT_REDEEM_FEE_BPS`.
     pub instant_redeem_fee_bps: Option<u16>,
-    /// Fee on settled queued shares, 0..=1,000 bps; zero disables it.
+    /// Vault-retained fee on settled queued shares, 0..=1,000 bps; zero disables it.
     pub queued_redeem_fee_bps: u16,
     /// Ceiling on the transient flash liability, in numéraire micro-units. `0`
     /// leaves the path disabled.

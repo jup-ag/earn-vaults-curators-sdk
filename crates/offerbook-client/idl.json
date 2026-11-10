@@ -5448,12 +5448,6 @@
   ],
   "accounts": [
     {
-      "name": "BaseAssetV1",
-      "discriminator": [
-        1
-      ]
-    },
-    {
       "name": "Config",
       "discriminator": [
         155,
@@ -6298,48 +6292,6 @@
       }
     },
     {
-      "name": "BaseAssetV1",
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "key",
-            "type": {
-              "defined": {
-                "name": "Key"
-              }
-            }
-          },
-          {
-            "name": "owner",
-            "type": "pubkey"
-          },
-          {
-            "name": "update_authority",
-            "type": {
-              "defined": {
-                "name": "UpdateAuthority"
-              }
-            }
-          },
-          {
-            "name": "name",
-            "type": "string"
-          },
-          {
-            "name": "uri",
-            "type": "string"
-          },
-          {
-            "name": "seq",
-            "type": {
-              "option": "u64"
-            }
-          }
-        ]
-      }
-    },
-    {
       "name": "ClassicNftAsset",
       "repr": {
         "kind": "c"
@@ -6417,7 +6369,7 @@
     },
     {
       "name": "Config",
-      "serialization": "bytemuck",
+      "serialization": "borsh",
       "repr": {
         "kind": "c"
       },
@@ -7044,34 +6996,8 @@
       }
     },
     {
-      "name": "Key",
-      "type": {
-        "kind": "enum",
-        "variants": [
-          {
-            "name": "Uninitialized"
-          },
-          {
-            "name": "AssetV1"
-          },
-          {
-            "name": "HashedAssetV1"
-          },
-          {
-            "name": "PluginHeaderV1"
-          },
-          {
-            "name": "PluginRegistryV1"
-          },
-          {
-            "name": "CollectionV1"
-          }
-        ]
-      }
-    },
-    {
       "name": "Loan",
-      "serialization": "bytemuck",
+      "serialization": "borsh",
       "repr": {
         "kind": "c"
       },
@@ -8141,7 +8067,7 @@
     },
     {
       "name": "Offer",
-      "serialization": "bytemuck",
+      "serialization": "borsh",
       "repr": {
         "kind": "c"
       },
@@ -9313,29 +9239,6 @@
       }
     },
     {
-      "name": "UpdateAuthority",
-      "type": {
-        "kind": "enum",
-        "variants": [
-          {
-            "name": "None"
-          },
-          {
-            "name": "Address",
-            "fields": [
-              "pubkey"
-            ]
-          },
-          {
-            "name": "Collection",
-            "fields": [
-              "pubkey"
-            ]
-          }
-        ]
-      }
-    },
-    {
       "name": "UpdateConfigAction",
       "type": {
         "kind": "enum",
@@ -9534,7 +9437,7 @@
     },
     {
       "name": "User",
-      "serialization": "bytemuck",
+      "serialization": "borsh",
       "repr": {
         "kind": "c"
       },
@@ -9723,7 +9626,7 @@
         "market or mint. Program IDs are stored rather than hardcoded so the same",
         "build works against devnet and mainnet deployments of JupLend."
       ],
-      "serialization": "bytemuck",
+      "serialization": "borsh",
       "repr": {
         "kind": "c"
       },

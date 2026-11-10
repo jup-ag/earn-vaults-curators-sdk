@@ -1,9 +1,9 @@
 use {
     crate::{
-        instructions::{SYSTEM_PROGRAM_ID, TOKEN_2022_PROGRAM_ID},
+        instructions::SYSTEM_PROGRAM_ID,
         pda::{
-            derive_curator_fee_account, derive_escrow, derive_escrow_token_account,
-            derive_protocol_delegate, derive_share_mint, derive_vault_authority,
+            derive_escrow, derive_escrow_token_account, derive_protocol_delegate,
+            derive_share_mint, derive_vault_authority,
         },
     },
     earn_vaults_interface::{VaultInstruction, constants::EVENT_PDA},
@@ -13,8 +13,9 @@ use {
 
 /// Settles a queued redeem: transfers base asset out of the vault into the
 /// per-user proceeds escrow. Shares were burned at `Redeem` time, so this
-/// step restores the fee portion to the canonical curator fee account and
-/// pays the remaining shares. The fee rate is read at settlement.
+/// step pays the net shares and leaves the fee's backing in the vault for
+/// remaining holders. The current fee rate applies at settlement, except when
+/// the request represents all remaining live and pending shares.
 pub struct FulfillRedeem {
     pub authority: Address,
     pub vault: Address,
@@ -42,7 +43,7 @@ impl FulfillRedeem {
                 AccountMeta::new(self.authority, true),
                 AccountMeta::new_readonly(delegate, false),
                 AccountMeta::new(self.vault, false),
-                AccountMeta::new(share_mint, false),
+                AccountMeta::new_readonly(share_mint, false),
                 AccountMeta::new_readonly(self.base_mint, false),
                 AccountMeta::new(escrow, false),
                 AccountMeta::new(escrow_token_account, false),
@@ -52,8 +53,6 @@ impl FulfillRedeem {
                 AccountMeta::new_readonly(self.token_program, false),
                 AccountMeta::new_readonly(EVENT_PDA.0, false),
                 AccountMeta::new_readonly(crate::ID, false),
-                AccountMeta::new(derive_curator_fee_account(&self.vault), false),
-                AccountMeta::new_readonly(TOKEN_2022_PROGRAM_ID, false),
             ],
             data,
         }
@@ -65,7 +64,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fulfillment_includes_writable_share_mint_and_fee_accounts() {
+    fn fulfillment_reads_share_mint_and_ends_before_transfer_hooks() {
         let vault = Address::new_from_array([2; 32]);
         let ix = FulfillRedeem {
             authority: Address::new_from_array([1; 32]),
@@ -78,19 +77,11 @@ mod tests {
         }
         .into_instruction();
         assert_eq!(ix.data, [12]);
-        assert_eq!(ix.accounts.len(), 15);
+        assert_eq!(ix.accounts.len(), 13);
         assert_eq!(
             ix.accounts[3],
-            AccountMeta::new(derive_share_mint(&vault), false)
+            AccountMeta::new_readonly(derive_share_mint(&vault), false)
         );
         assert_eq!(ix.accounts[12], AccountMeta::new_readonly(crate::ID, false));
-        assert_eq!(
-            ix.accounts[13],
-            AccountMeta::new(derive_curator_fee_account(&vault), false)
-        );
-        assert_eq!(
-            ix.accounts[14],
-            AccountMeta::new_readonly(TOKEN_2022_PROGRAM_ID, false)
-        );
     }
 }

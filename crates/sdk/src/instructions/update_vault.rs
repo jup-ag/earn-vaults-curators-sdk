@@ -4,7 +4,6 @@ use {
         VaultInstruction,
         arguments::{AssetAdd, AssetUpdate, PositionAdd, PositionUpdate, UpdateVaultArgs},
         constants::EVENT_PDA,
-        encoding::PodOption,
         state::{ASSET_FLAG_CHAINLINK, ASSET_FLAG_DEPOSIT_ENABLED},
     },
     solana_address::Address,
@@ -24,7 +23,7 @@ use {
 ///   `MAX_MANAGEMENT_FEE_BPS`; only applies right after `crystallize_fees`
 ///   (the program rejects with `FeeAccrualPending` otherwise). The global
 ///   protocol rate is additive.
-/// - `instant_redeem_fee_bps`: new instant-redeem fee; `Some(u16::MAX)`
+/// - `instant_redeem_fee_bps`: new vault-retained instant-redeem fee; `Some(u16::MAX)`
 ///   disables instant redeems.
 /// - `asset_update`: rewrite part of an asset row's oracle config (the
 ///   rotation path for a deprecated Pyth feed).
@@ -47,7 +46,7 @@ pub struct UpdateVault {
     /// `management_fee_bps`. The global protocol rate is additive.
     pub performance_fee_bps: Option<u16>,
     pub instant_redeem_fee_bps: Option<u16>,
-    /// Fee on queued shares at settlement, 0..=1,000 bps; Some(0) disables it.
+    /// Vault-retained fee at queued settlement, 0..=1,000 bps; Some(0) disables it.
     pub queued_redeem_fee_bps: Option<u16>,
     pub asset_update: Option<AssetUpdateFields>,
     pub position_update: Option<PositionUpdateFields>,
@@ -81,7 +80,7 @@ pub struct UpdateVault {
     /// trailing account) must hold zero.
     pub remove_asset: Option<RemoveAssetFields>,
     /// Retire a position row with no live mark (never-priced, reset, or marked
-    /// to zero) and free its slot. LENDER_ONLY slots cannot be removed.
+    /// to zero) and free its slot.
     pub remove_position: Option<u8>,
     /// Attest full repayment of an explicit DEBT slot after verifying it
     /// off-chain. Records zero without changing drift limits; revalidate AUM
@@ -131,6 +130,8 @@ pub struct AssetUpdateFields {
     /// Independent future timestamp tolerance; zero rejects future observations.
     pub max_future_skew_seconds: Option<u32>,
     pub max_confidence_bps: Option<u16>,
+    /// Hand-priced row's drift cap, 1..=200 bps; None leaves it unchanged.
+    pub max_drift_bps: Option<u16>,
     /// Strategy-outflow ceiling; `0` disables deployment, `u64::MAX` is unlimited.
     pub max_deployed: Option<u64>,
     /// Restate the remaining `deployed` charge across all protocols in raw token
@@ -183,6 +184,7 @@ impl AssetUpdateFields {
             report_decimals: pod_opt(self.report_decimals),
             max_staleness_seconds: pod_opt(self.max_staleness_seconds),
             max_confidence_bps: pod_opt(self.max_confidence_bps),
+            max_drift_bps: pod_opt(self.max_drift_bps),
             max_deployed: pod_opt(self.max_deployed),
             deployed: pod_opt(self.deployed),
             max_deposit: pod_opt(self.max_deposit),
@@ -233,16 +235,8 @@ impl UpdateVault {
             performance_fee_bps: pod_opt(self.performance_fee_bps),
             instant_redeem_fee_bps: pod_opt(self.instant_redeem_fee_bps),
             queued_redeem_fee_bps: pod_opt(self.queued_redeem_fee_bps),
-            asset: self
-                .asset_update
-                .as_ref()
-                .map_or_else(PodOption::none, |asset| PodOption::some(asset.to_wire())),
-            position: self
-                .position_update
-                .as_ref()
-                .map_or_else(PodOption::none, |position| {
-                    PodOption::some(position.to_wire())
-                }),
+            asset: pod_opt(self.asset_update.as_ref().map(|a| a.to_wire())),
+            position: pod_opt(self.position_update.as_ref().map(|p| p.to_wire())),
             max_flash_liability: pod_opt(self.max_flash_liability),
             max_aum_staleness_seconds: pod_opt(self.max_aum_staleness_seconds),
             sink_haircut_bps: pod_opt(self.sink_haircut_bps),
@@ -250,14 +244,8 @@ impl UpdateVault {
             sink_bootstrap_cap_bps: pod_opt(self.sink_bootstrap_cap_bps),
             sink_capacity: pod_opt(self.sink_capacity),
             sink_release: pod_opt(self.sink_release),
-            add_asset: self
-                .add_asset
-                .as_ref()
-                .map_or_else(PodOption::none, |asset| PodOption::some(asset.to_wire())),
-            add_position: self
-                .add_position
-                .as_ref()
-                .map_or_else(PodOption::none, |position| PodOption::some(*position)),
+            add_asset: pod_opt(self.add_asset.as_ref().map(|a| a.to_wire())),
+            add_position: pod_opt(self.add_position),
             remove_asset: pod_opt(self.remove_asset.as_ref().map(|r| r.index)),
             remove_position: pod_opt(self.remove_position),
             retire_debt: pod_opt(self.retire_debt),
@@ -332,6 +320,7 @@ mod tests {
                 max_staleness_seconds: Some(300),
                 max_future_skew_seconds: Some(120),
                 max_confidence_bps: Some(50),
+                max_drift_bps: Some(25),
                 max_deployed: Some(1_000),
                 deployed: Some(500),
                 max_deposit: Some(2_000),
@@ -382,6 +371,7 @@ mod tests {
         assert_eq!(args.paused.get(), Some(4));
         assert_eq!(args.timelock_delay.get().map(|value| value.get()), Some(0));
         assert_eq!(asset.index, 2);
+        assert_eq!(asset.max_drift_bps.get().unwrap().get(), 25);
         assert_eq!(args.asset_max_future_skew_seconds.get().unwrap().get(), 120);
         assert_eq!(asset.oracle.get(), Some(address(4)));
         assert_eq!(asset.flags.get(), Some(ASSET_FLAG_CHAINLINK));

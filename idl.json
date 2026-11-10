@@ -1862,7 +1862,7 @@
           {
             "kind": "instructionAccountNode",
             "name": "shareMint",
-            "isWritable": true,
+            "isWritable": false,
             "isSigner": false
           },
           {
@@ -1916,18 +1916,6 @@
           {
             "kind": "instructionAccountNode",
             "name": "program",
-            "isWritable": false,
-            "isSigner": false
-          },
-          {
-            "kind": "instructionAccountNode",
-            "name": "curatorFeeAccount",
-            "isWritable": true,
-            "isSigner": false
-          },
-          {
-            "kind": "instructionAccountNode",
-            "name": "token2022",
             "isWritable": false,
             "isSigner": false
           }
@@ -2482,7 +2470,7 @@
           {
             "kind": "instructionAccountNode",
             "name": "curatorShareAccount",
-            "isWritable": true,
+            "isWritable": false,
             "isSigner": false
           },
           {
@@ -4091,6 +4079,24 @@
             },
             {
               "kind": "structFieldTypeNode",
+              "name": "maxDriftBps",
+              "type": {
+                "kind": "optionTypeNode",
+                "fixed": true,
+                "item": {
+                  "kind": "numberTypeNode",
+                  "format": "u16",
+                  "endian": "le"
+                },
+                "prefix": {
+                  "kind": "numberTypeNode",
+                  "format": "u8",
+                  "endian": "le"
+                }
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
               "name": "maxDeployed",
               "type": {
                 "kind": "optionTypeNode",
@@ -4861,6 +4867,15 @@
             {
               "kind": "structFieldTypeNode",
               "name": "maxConfidenceBps",
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "u16",
+                "endian": "le"
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "maxDriftBps",
               "type": {
                 "kind": "numberTypeNode",
                 "format": "u16",

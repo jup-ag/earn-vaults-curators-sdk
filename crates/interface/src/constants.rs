@@ -134,7 +134,7 @@ pub const MAX_TIMELOCK_DELAY: U64 = U64::from_bytes((30u64 * 24 * 60 * 60).to_le
 pub const DEFAULT_TIMELOCK_DELAY: U64 = U64::from_bytes((24_u64 * 60 * 60).to_le_bytes());
 
 pub const MAX_INSTANT_REDEEM_FEE_BPS: u16 = 1_000;
-/// Maximum curator fee on settled queued shares (10%).
+/// Maximum vault-retained fee on settled queued shares (10%).
 pub const MAX_QUEUED_REDEEM_FEE_BPS: u16 = 1_000;
 pub const MIN_INSTANT_REDEEM_FEE_BPS: u16 = 50;
 

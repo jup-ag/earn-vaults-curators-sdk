@@ -1,6 +1,72 @@
 # Compatibility notes
 
-Synced with earn vault program commit `4b20d514b2f40ca871903f441c6c93403944ccd8`.
+Synced with earn vault program commit `9b5f38c82d4cdbd2b468afdc12a0651381637632`.
+
+## Manual-asset drift, retained exit fees and Nest collateral (`9b5f38c`)
+
+`AssetConfig` grows from 179 to 181 bytes and `Vault::LEN` from 2,318 to
+2,334 bytes. The new `max_drift_bps: u16` follows `max_confidence_bps` at row
+offset 74, moving subsequent row fields by two bytes and fields after the eight
+rows by 16 bytes. All 128 reserved bytes remain. Existing vaults require a
+separate migration that preserves the old fields and initializes every row's
+cap to 200. Resizing or zero-extending alone is insufficient, and this commit
+provides no migration instruction. Pause flows during migration and do not
+deploy over unmigrated vaults. Rollback requires a reverse account migration
+and matching program and clients.
+
+`AssetUpdate` inserts a three-byte fixed `Option<u16>` in the same position;
+rebuild UpdateVault transactions and IDL clients. Initialization and asset-add
+encodings are unchanged. Set `AssetUpdateFields.max_drift_bps` or CLI
+`update-vault --asset-index N --asset-max-drift-bps BPS` to 1..=200; omission
+preserves the cap, while zero and waiver values are rejected. New rows start
+at 200. Changing the cap invalidates AUM; revalidate before settlement. Manual
+deposit headroom uses the largest active manual row cap. Curators may still
+restate manual asset prices outright. For non-debt position marks, curator
+updates obey drift limits while either share flow is open; outright marks and
+resets of initialized required rows need both `Pause::SHARE_FLOWS` bits set.
+
+Instant and queued exit fees now remain in the vault for remaining live and
+queued holders. No curator shares are minted; the corresponding HWM increase
+prevents a performance fee on this redistribution. `fee_shares` in redemption
+events reports the retained share-equivalent. Instant exits waive the fee only
+when no effective supply remains. A queued request representing all remaining
+effective supply pays no fee, including on its partial fills. Previously minted
+curator fee shares remain claimable. Small instant fees no longer fail because
+they round below one share; liquidity and minimum-output checks still apply.
+
+`FulfillRedeem` now has 13 base accounts: its share mint is readonly and asset
+transfer-hook accounts follow `program` directly. It no longer appends the
+curator fee account and Token-2022 program. The new program also accepts the
+legacy trailing pair. `RedeemDirect` retains its legacy `curator_share_account`
+slot as readonly and ignored; any address suffices. The CLI supplies the vault
+authority and stops creating a curator share ATA. Deploy the matching program
+before using these new builders against nonzero queued fees or the old instant
+path. Instruction tags and redemption event encodings are unchanged.
+
+A pinned Nest receipt may now be listed as a non-deposit asset for Offerbook
+collateral, but cannot be a sink. Listing it, or first binding an already-listed
+receipt, requires both share flows paused. Keep the Nest mark gross: custody
+receipts plus remote/in-flight Nest value, excluding receipts in other protocols.
+`ValidateAum` deducts the priced custody row from that mark with saturation to
+avoid double counting. Moves to/from Offerbook fold value between marks and
+dirty Nest; re-attest it before settlement. A stale-low Nest mark can reach zero,
+requiring receipts/USDC to return or a curator restatement with flows paused to
+recover remote value. Swaps and collateral/debt Operate legs reject the pinned
+mint. No new route accounts or instruction tags are needed.
+
+Offerbook escrow-yield recall now accepts USDT/jlUSDT as well as USDC/jlUSDC;
+vault supply remains USDC-only. Use the registry, ATAs and user claim derived
+for the selected mint. Recall redeems all shares and disables yield for every
+mint. Include escrow USDT and jlUSDT in the Offerbook mark while held. See the
+[upstream yield guide](https://github.com/jup-ag/earn-vaults-programs/blob/9b5f38c82d4cdbd2b468afdc12a0651381637632/docs/OFFERBOOK_ESCROW_YIELD.md)
+and [technical reference](https://github.com/jup-ag/earn-vaults-programs/blob/9b5f38c82d4cdbd2b468afdc12a0651381637632/docs/technical-reference.md).
+
+The Offerbook client is regenerated from the supplied IDL. Its five accounts
+declare Borsh serialization; their generated encodings, fields, instruction
+accounts and discriminators remain unchanged. The IDL removes the external
+Metaplex Core `BaseAssetV1`, `Key` and `UpdateAuthority` types, so these exports
+are removed. Core asset consumers must use a separate Core client. The generator
+retains its independent Core decoding regression fixture.
 
 ## Share metadata, CLI transactions and Offerbook (`4b20d51`)
 

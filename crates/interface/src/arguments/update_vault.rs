@@ -38,6 +38,10 @@ pub struct AssetUpdate {
     /// Confidence cap in bps of price; `0` means the global default.
     #[codama(type = option(number(u16, le), fixed))]
     pub max_confidence_bps: PodOption<U16>,
+    /// Hand-priced row's drift cap, 1..=200 bps; None leaves it unchanged.
+    /// Unlike positions, zero and the waiver sentinel are rejected.
+    #[codama(type = option(number(u16, le), fixed))]
+    pub max_drift_bps: PodOption<U16>,
     /// Per-asset strategy-outflow ceiling; `0` disables deployment, `u64::MAX` is unlimited.
     #[codama(type = option(number(u64, le), fixed))]
     pub max_deployed: PodOption<U64>,
@@ -77,6 +81,7 @@ impl ZcValidate for AssetUpdate {
         PodOption::validate_ref(&value.report_decimals)?;
         PodOption::validate_ref(&value.max_staleness_seconds)?;
         PodOption::validate_ref(&value.max_confidence_bps)?;
+        PodOption::validate_ref(&value.max_drift_bps)?;
         PodOption::validate_ref(&value.max_deployed)?;
         PodOption::validate_ref(&value.deployed)?;
         PodOption::validate_ref(&value.max_deposit)?;
@@ -108,7 +113,9 @@ pub struct PositionUpdate {
     /// `INITIALIZED`, zeroes the mark), so the next `price_opaque` bootstraps
     /// again against the last validated AUM. The unbrick path for an asset-like
     /// slot frozen at a dust/wrong first mark. DEBT rows may never reset: omitting
-    /// a live liability would overstate NAV.
+    /// a live liability would overstate NAV. Resetting an initialized
+    /// `REQUIRED_IN_AUM` row needs both share flows paused (`Pause::SHARE_FLOWS`),
+    /// counting `paused` in the same instruction.
     #[codama(type = option(number(u8), fixed))]
     pub reset: PodOption<u8>,
 }
@@ -282,7 +289,7 @@ pub struct UpdateVaultArgs {
     /// Validated AUM age limit; zero selects 60s, positive u32 values apply exactly.
     #[codama(type = option(number(u32, le), fixed))]
     pub max_aum_staleness_seconds: PodOption<U32>,
-    /// Fee on queued shares at settlement; Some(0) disables, capped at 1,000 bps.
+    /// Vault-retained fee at queued settlement; Some(0) disables, capped at 1,000 bps.
     #[codama(type = option(number(u16, le), fixed))]
     pub queued_redeem_fee_bps: PodOption<U16>,
 }
