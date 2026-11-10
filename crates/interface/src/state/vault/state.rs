@@ -122,10 +122,11 @@ pub struct Vault {
     /// position and sink freshness limits remain independent.
     #[codama(type = number(u32))]
     pub max_aum_staleness_seconds: U32,
-    /// Nest receipt custody belongs to its position mark, never a sink or
-    /// asset row. Zero means unbound; retained after policy close.
+    /// Nest receipt custody belongs to its position mark, never a sink. If
+    /// also listed, `ValidateAum` deducts the row from that gross mark. Zero
+    /// means unbound; retained after policy close.
     pub nest_receipt_mint: Address,
-    /// Curator fee on settled queued shares, in bps; zero disables it.
+    /// Vault-retained fee on settled queued shares, in bps; zero disables it.
     #[codama(type = number(u16))]
     pub queued_redeem_fee_bps: U16,
     /// Zero-initialised room for future fields.
@@ -160,6 +161,9 @@ impl FeeBreakdown {
         self.curator_total().saturating_add(self.protocol_total())
     }
 }
+
+/// Streaming-fee divisor: bps × seconds-per-year.
+const FEE_DENOM: u128 = 10_000 * SECONDS_PER_YEAR;
 
 /// u128 → u64, saturating: callers are AUM-bounded, so a saturated
 /// intermediate must stay huge rather than wrap into a small wrong number.
@@ -338,7 +342,6 @@ impl Vault {
     /// AUM everywhere so no cohort buys into or escapes another's fees.
     #[inline]
     pub fn accrued_fee_assets(&self, now: i64) -> u64 {
-        const DENOM: u128 = 10_000 * SECONDS_PER_YEAR;
         // Saturating: degrade to "everything is fees", never to a small
         // wrong number. Fractional numéraire stays carried in capital-time
         // until it becomes a whole collectible unit; crystallization frequency
@@ -346,21 +349,15 @@ impl Vault {
         let numerator = self
             .fee_capital_time_at(now)
             .saturating_mul(self.streaming_bps());
-        let assets = numerator / DENOM;
-        u64::try_from(assets).unwrap_or(u64::MAX)
-    }
-
-    #[inline]
-    fn fold_capital_time(&mut self, now: i64) {
-        self.fee_capital_time = U128::from(self.fee_capital_time_at(now));
-        self.last_fee_accrual_at = I64::from(now);
+        narrow(numerator / FEE_DENOM)
     }
 
     /// Fold the elapsed AUM·time segment and stamp the clock. MUST run before
     /// any write to `aum` so each segment is billed at the AUM that held it.
     #[inline]
     pub fn accrue_capital_time(&mut self, now: i64) {
-        self.fold_capital_time(now);
+        self.fee_capital_time = U128::from(self.fee_capital_time_at(now));
+        self.last_fee_accrual_at = I64::from(now);
     }
 
     /// Watermark basis: per-share NAV net of the streaming liability and folded
@@ -390,7 +387,7 @@ impl Vault {
         // u128. The early floor costs < 1 numéraire unit.
         let perf =
             delta.saturating_mul(eff_supply as u128) / NAV_SCALE * self.performance_bps() / 10_000;
-        u64::try_from(perf).unwrap_or(u64::MAX)
+        narrow(perf)
     }
 
     /// Fold both fee integrals (streaming + performance, ratcheting the HWM).
@@ -400,7 +397,7 @@ impl Vault {
     /// unchanged there.
     #[inline]
     pub fn accrue_fees(&mut self, share_supply: u64, now: i64) {
-        let eff_supply = share_supply.saturating_add(u64::from(self.pending_redeem_shares));
+        let eff_supply = self.eff_supply(share_supply);
         // No holders → there is no cohort to charge or dilute. Forgive fee
         // integrals that can no longer be consumed, then re-arm the HWM from
         // that cleared basis. Re-arming before the clear would make the next
@@ -417,7 +414,7 @@ impl Vault {
         // Measure the NAV rise before forgiving anything above the payable
         // cap. Otherwise the write-down itself raises fee-net NAV and can be
         // re-booked immediately as a performance fee.
-        self.fold_capital_time(now);
+        self.accrue_capital_time(now);
         let pending = self.perf_pending(eff_supply, now);
         self.perf_fee_accrued = U64::from(u64::from(self.perf_fee_accrued).saturating_add(pending));
         self.write_down_unpayable_fees(eff_supply, now);
@@ -457,7 +454,6 @@ impl Vault {
     /// forgiveness lifts the HWM by the waived claim per share.
     #[inline]
     pub fn write_down_unpayable_fees(&mut self, eff_supply: u64, now: i64) {
-        const DENOM: u128 = 10_000 * SECONDS_PER_YEAR;
         let cap = self.fee_payable_cap();
         let bps = self.streaming_bps();
         let prior_capital_time = u128::from(self.fee_capital_time);
@@ -467,8 +463,8 @@ impl Vault {
         // Compare the exact fractional claim to the cap. In particular, a
         // zero-cap book must forgive sub-unit capital-time instead of letting
         // it resurrect after a later AUM recovery.
-        if prior_capital_time.saturating_mul(bps) > u128::from(cap).saturating_mul(DENOM) {
-            self.fee_capital_time = U128::from(u128::from(cap).saturating_mul(DENOM) / bps);
+        if prior_capital_time.saturating_mul(bps) > u128::from(cap).saturating_mul(FEE_DENOM) {
+            self.fee_capital_time = U128::from(u128::from(cap).saturating_mul(FEE_DENOM) / bps);
         }
 
         let room = cap.saturating_sub(self.accrued_fee_assets(now));
@@ -497,7 +493,7 @@ impl Vault {
     /// cohort cannot enter or exit around it.
     #[inline]
     pub fn raw_fee_liability(&self, share_supply: u64, now: i64) -> u64 {
-        let eff_supply = share_supply.saturating_add(u64::from(self.pending_redeem_shares));
+        let eff_supply = self.eff_supply(share_supply);
         self.accrued_fee_assets(now)
             .saturating_add(u64::from(self.perf_fee_accrued))
             .saturating_add(self.perf_pending(eff_supply, now))
@@ -510,11 +506,10 @@ impl Vault {
     /// before this runs.
     #[inline]
     pub fn fee_breakdown(&self) -> FeeBreakdown {
-        const DENOM: u128 = 10_000 * SECONDS_PER_YEAR;
         let capital_time = u128::from(self.fee_capital_time);
-        let streaming = capital_time.saturating_mul(self.streaming_bps()) / DENOM;
+        let streaming = capital_time.saturating_mul(self.streaming_bps()) / FEE_DENOM;
         let curator_management =
-            capital_time.saturating_mul(u128::from(self.management_fee_bps.get())) / DENOM;
+            capital_time.saturating_mul(u128::from(self.management_fee_bps.get())) / FEE_DENOM;
         let perf = u128::from(u64::from(self.perf_fee_accrued));
 
         let owed = streaming.saturating_add(perf);
@@ -546,7 +541,6 @@ impl Vault {
     /// its claim in the integrals for a later crystallization.
     #[inline]
     pub fn debit_fees(&mut self, paid: FeeBreakdown) {
-        const DENOM: u128 = 10_000 * SECONDS_PER_YEAR;
         let bps = self.streaming_bps();
         let capital_time = u128::from(self.fee_capital_time);
         let streaming = u128::from(paid.curator_management)
@@ -557,7 +551,7 @@ impl Vault {
         let consumed = if bps == 0 {
             capital_time // No claim accrued during the fee-free interval.
         } else {
-            streaming.saturating_mul(DENOM).div_ceil(bps)
+            streaming.saturating_mul(FEE_DENOM).div_ceil(bps)
         };
         self.fee_capital_time = U128::from(capital_time.saturating_sub(consumed));
         self.perf_fee_accrued = U64::from(
@@ -804,6 +798,10 @@ pub enum Pause {
 impl Pause {
     /// Every valid bit — `SetPaused` / `UpdateVault` mask their input against this.
     pub const ALL: u8 = Self::Subscribe as u8 | Self::Redeem as u8 | Self::Strategy as u8;
+    /// Both share flows. An outright curator write that lowers a position
+    /// mark — `PriceOpaque` or a position reset — needs both bits set, so
+    /// that no share flow settles at the new mark before the curator checks it.
+    pub const SHARE_FLOWS: u8 = Self::Subscribe as u8 | Self::Redeem as u8;
 }
 
 impl Account for Vault {
@@ -814,19 +812,19 @@ impl Account for Vault {
 check_account_layout!(Vault);
 
 // Pin the zero-copy ABI; vaults on any older layout require migration.
-const _: () = assert!(core::mem::size_of::<Vault>() == 2_317);
-const _: () = assert!(Vault::LEN == 2_318);
-const _: () = assert!(core::mem::offset_of!(Vault, max_aum_staleness_seconds) == 2_151);
+const _: () = assert!(core::mem::size_of::<Vault>() == 2_333);
+const _: () = assert!(Vault::LEN == 2_334);
+const _: () = assert!(core::mem::offset_of!(Vault, max_aum_staleness_seconds) == 2_167);
 const _: () = assert!(core::mem::size_of::<SinkSlot>() == 57);
 const _: () = assert!(core::mem::offset_of!(SinkSlot, balance) == 40);
-const _: () = assert!(core::mem::offset_of!(Vault, nest_receipt_mint) == 2_155);
-const _: () = assert!(core::mem::offset_of!(Vault, queued_redeem_fee_bps) == 2_187);
-const _: () = assert!(core::mem::offset_of!(Vault, _reserved) == 2_189);
-const _: () = assert!(core::mem::size_of::<AssetConfig>() == 179);
+const _: () = assert!(core::mem::offset_of!(Vault, nest_receipt_mint) == 2_171);
+const _: () = assert!(core::mem::offset_of!(Vault, queued_redeem_fee_bps) == 2_203);
+const _: () = assert!(core::mem::offset_of!(Vault, _reserved) == 2_205);
+const _: () = assert!(core::mem::size_of::<AssetConfig>() == 181);
 const _: () = assert!(core::mem::offset_of!(Vault, management_fee_bps) == 106);
-const _: () = assert!(core::mem::offset_of!(Vault, performance_fee_bps) == 2_143);
-const _: () = assert!(core::mem::offset_of!(Vault, curator_fee_account_bump) == 2_145);
-const _: () = assert!(core::mem::offset_of!(Vault, protocol_fee_account_bump) == 2_146);
+const _: () = assert!(core::mem::offset_of!(Vault, performance_fee_bps) == 2_159);
+const _: () = assert!(core::mem::offset_of!(Vault, curator_fee_account_bump) == 2_161);
+const _: () = assert!(core::mem::offset_of!(Vault, protocol_fee_account_bump) == 2_162);
 
 // The row arrays are spelled with literal lengths because codama's IDL derive
 // cannot resolve a const there. This is the only thing keeping the literals and

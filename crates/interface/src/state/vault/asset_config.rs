@@ -1,5 +1,5 @@
 use {
-    crate::constants::DEFAULT_ASSET_STALENESS_SECONDS,
+    crate::constants::{DEFAULT_ASSET_STALENESS_SECONDS, MAX_DRIFT_BPS},
     codama_macros::CodamaType,
     solana_address::Address,
     wincode::{SchemaRead, SchemaWrite},
@@ -43,6 +43,10 @@ pub struct AssetConfig {
     pub report_decimals: u8,
     #[codama(type = number(u16))]
     pub max_confidence_bps: U16,
+    /// Hand-priced row's delegate drift cap per window, 1..=200 bps.
+    /// Defaults to 200; also bounds the manual-price entry reserve.
+    #[codama(type = number(u16))]
+    pub max_drift_bps: U16,
     #[codama(type = number(u64))]
     pub deployed: U64,
     /// Strategy-outflow ceiling; `0` disables deployment, `u64::MAX` is unlimited.
@@ -91,6 +95,7 @@ impl AssetConfig {
             ),
             report_decimals: 0,
             max_confidence_bps: U16::ZERO,
+            max_drift_bps: U16::from_bytes((MAX_DRIFT_BPS as u16).to_le_bytes()),
             deployed: U64::ZERO,
             max_deployed: U64::ZERO,
             max_deposit: U64::ZERO,

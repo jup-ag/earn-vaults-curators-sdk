@@ -95,9 +95,29 @@ fn shank_accounts_decode_without_a_discriminator() {
 fn core_asset_key_is_not_stripped() {
     test_generated_client(
         "core-fixture",
-        include_str!("../../offerbook-client/idl.json"),
-        &include_str!("../../offerbook-client/tests/core_asset.rs")
-            .replace("offerbook_client", "core_fixture"),
+        r#"{
+        "accounts": [{"name": "BaseAssetV1", "discriminator": [1]}],
+        "types": [
+            {"name": "BaseAssetV1", "type": {"kind": "struct", "fields": [
+                {"name": "key", "type": {"defined": {"name": "Key"}}},
+                {"name": "owner", "type": "pubkey"},
+                {"name": "update_authority", "type": {"defined": {"name": "UpdateAuthority"}}},
+                {"name": "name", "type": "string"},
+                {"name": "uri", "type": "string"},
+                {"name": "seq", "type": {"option": "u64"}}
+            ]}},
+            {"name": "Key", "type": {"kind": "enum", "variants": [
+                {"name": "Uninitialized"}, {"name": "AssetV1"},
+                {"name": "HashedAssetV1"}, {"name": "PluginHeaderV1"},
+                {"name": "PluginRegistryV1"}, {"name": "CollectionV1"}
+            ]}},
+            {"name": "UpdateAuthority", "type": {"kind": "enum", "variants": [
+                {"name": "None"}, {"name": "Address", "fields": ["pubkey"]},
+                {"name": "Collection", "fields": ["pubkey"]}
+            ]}}
+        ]
+    }"#,
+        include_str!("fixtures/core_asset.rs"),
     );
 }
 

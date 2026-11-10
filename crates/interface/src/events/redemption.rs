@@ -27,7 +27,7 @@ pub struct RedeemFulfilled {
     pub amount_paid: U64,
     #[codama(type = number(u64))]
     pub remaining: U64,
-    /// Settled shares retained for the curator instead of paid out.
+    /// Settled shares whose backing stays in the vault; no fee shares are minted.
     #[codama(type = number(u64))]
     pub fee_shares: U64,
 }
@@ -54,6 +54,7 @@ pub struct RedeemedInstant {
     pub shares_burned: U64,
     #[codama(type = number(u64))]
     pub amount_paid: U64,
+    /// Retained fee expressed in shares (rounded down); no shares are minted.
     #[codama(type = number(u64))]
     pub fee_shares: U64,
 }

@@ -84,8 +84,10 @@ impl ToStr for VaultError {
 
             Self::InvalidMintForVault => "Mint PDA does not belong to the supplied vault",
             Self::InvalidPriceFeedMint => "PriceFeed mint does not match the token account mint",
-            Self::OracleStale => "PriceFeed timestamp exceeds MAX_ORACLE_STALENESS_SECONDS",
-            Self::PricedSlotStale => "Priced-protocol slot timestamp exceeds MAX_STALENESS_SECONDS",
+            Self::OracleStale => "PriceFeed age exceeds the configured staleness window",
+            Self::PricedSlotStale => {
+                "Priced-protocol slot age exceeds the configured staleness window"
+            }
             Self::PricedSlotMissing => "A required priced-protocol slot has never been priced",
             Self::DisallowedAsset => "Mint is not listed in Vault.allowed_assets",
             Self::TimelockNotElapsed => {

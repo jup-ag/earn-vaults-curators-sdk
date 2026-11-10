@@ -36,8 +36,9 @@ pub struct SetProtocolPolicy {
 }
 
 impl SetProtocolPolicy {
-    /// Pin the Nest receipt mint as position-only custody. The binding survives
-    /// policy close; a new receipt is accepted only once no Nest position remains.
+    /// Pin the Nest receipt mint. A listed receipt must disable deposits; first
+    /// binding a listed receipt requires both share flows paused. The binding
+    /// survives policy close; changing it requires removing the Nest position.
     pub fn nest_route(
         curator: Address,
         vault: Address,

@@ -12,16 +12,17 @@ use {
 
 #[test]
 fn unaligned_accounts_preserve_pinned_field_offsets() {
-    assert_eq!(Vault::LEN, 2318);
+    assert_eq!(Vault::LEN, 2334);
     assert_eq!(Delegate::LEN, 106);
     assert_eq!(Escrow::LEN, 150);
     assert_eq!(core::mem::align_of::<Vault>(), 1);
     #[repr(align(16))]
-    struct Buffer([u8; 2319]);
-    let mut bytes = Buffer([0; 2319]);
+    struct Buffer([u8; 2335]);
+    let mut bytes = Buffer([0; 2335]);
     bytes.0[1] = Vault::DISCRIMINATOR;
     let vault = Vault::read_mut(&mut bytes.0[1..]).unwrap();
     vault.aum = U64::new(123);
+    vault.assets[7].max_drift_bps = 25u16.into();
     vault.assets[7].deployed = U64::new(u64::MAX);
     for (i, sink) in vault.sinks.iter_mut().enumerate() {
         sink.balance = U64::new(456 + i as u64);
@@ -29,21 +30,29 @@ fn unaligned_accounts_preserve_pinned_field_offsets() {
     vault.nest_receipt_mint = Address::new_from_array([7; 32]);
     vault.queued_redeem_fee_bps = 200u16.into();
     assert_eq!(&bytes.0[2 + 136..2 + 144], &123u64.to_le_bytes());
-    let offset = 2 + 256 + 7 * 179 + 74;
+    let drift_offset = 2 + 256 + 7 * 181 + 74;
+    assert_eq!(
+        &bytes.0[drift_offset..drift_offset + 2],
+        &25u16.to_le_bytes()
+    );
+    let offset = 2 + 256 + 7 * 181 + 76;
     assert_eq!(&bytes.0[offset..offset + 8], &u64::MAX.to_le_bytes());
     for i in 0..4 {
-        let offset = 2 + 1912 + i * 57 + 40;
+        let offset = 2 + 1928 + i * 57 + 40;
         assert_eq!(
             &bytes.0[offset..offset + 8],
             &(456 + i as u64).to_le_bytes()
         );
     }
-    assert_eq!(&bytes.0[2 + 2155..2 + 2187], &[7; 32]);
-    assert_eq!(&bytes.0[2 + 2187..2 + 2189], &200u16.to_le_bytes());
-    assert_eq!(&bytes.0[2 + 2189..], &[0; 128]);
+    assert_eq!(&bytes.0[2 + 2171..2 + 2203], &[7; 32]);
+    assert_eq!(&bytes.0[2 + 2203..2 + 2205], &200u16.to_le_bytes());
+    assert_eq!(&bytes.0[2 + 2205..], &[0; 128]);
     let vault = Vault::read(&bytes.0[1..]).unwrap();
     assert_eq!(vault.aum.get(), 123);
     assert_eq!(wincode::serialize(vault).unwrap(), bytes.0[2..]);
+    assert!(Vault::read(&bytes.0[1..2334]).is_err());
+    assert!(Vault::read(&bytes.0[1..2319]).is_err()); // Previous 2,318-byte layout.
+    assert!(Vault::read_mut(&mut bytes.0[1..2319]).is_err());
     assert!(Vault::read(&bytes.0[1..2318]).is_err());
     assert!(Vault::read(&bytes.0[1..2317]).is_err());
     assert!(Vault::read(&bytes.0[1..2189]).is_err());
@@ -106,10 +115,20 @@ fn borrowed_instructions_validate_active_fixed_fields() {
 
     let mut update = [0u8; 1 + size_of::<UpdateVaultArgs>()];
     update[0] = 1;
+    // The pre-drift AssetUpdate encoding is three bytes shorter.
+    assert!(VaultInstruction::deserialize(&update[..update.len() - 3]).is_err());
     let asset = 1 + core::mem::offset_of!(UpdateVaultArgs, asset);
     update[asset] = 1;
     update[asset + 2] = 2; // Invalid nested oracle option tag.
     assert!(VaultInstruction::deserialize(&update).is_err());
+    update[asset + 2] = 0;
+    let drift = asset
+        + 1
+        + core::mem::offset_of!(earn_vaults_interface::arguments::AssetUpdate, max_drift_bps);
+    update[drift] = 2;
+    assert!(VaultInstruction::deserialize(&update).is_err());
+    update[drift] = 0;
+    assert!(VaultInstruction::deserialize(&update).is_ok());
     update[asset] = 0;
     assert!(VaultInstruction::deserialize(&update).is_ok());
     for offset in [

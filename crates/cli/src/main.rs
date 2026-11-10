@@ -178,10 +178,10 @@ enum Cmd {
         /// Curator HWM performance fee on NAV gains, in bps.
         #[arg(long)]
         performance_fee_bps: Option<u16>,
-        /// Instant-withdrawal exit fee in bps (omit to disable RedeemDirect).
+        /// Vault-retained instant-withdrawal fee in bps (omit to disable RedeemDirect).
         #[arg(long)]
         instant_redeem_fee_bps: Option<u16>,
-        /// Fee on settled queued shares in bps (0..=1000; zero disables).
+        /// Vault-retained fee on settled queued shares in bps (0..=1000; zero disables).
         #[arg(long)]
         queued_redeem_fee_bps: Option<u16>,
     },
@@ -323,13 +323,13 @@ enum Cmd {
         /// same slot (send it first in the same tx).
         #[arg(long, value_name = "BPS")]
         performance_fee_bps: Option<u16>,
-        /// Instant-withdrawal exit fee in bps (50..=1000), or 65535 to disable
+        /// Vault-retained instant-withdrawal fee in bps (50..=1000), or 65535 to disable
         /// RedeemDirect. Refused while the vault's marks can move NAV by more
         /// than the fee in one window — including any JupiterLend slot not
         /// flagged Earn-only (LENDER_ONLY).
         #[arg(long, value_name = "BPS")]
         instant_redeem_fee_bps: Option<u16>,
-        /// Fee on settled queued shares in bps (0..=1000; zero disables).
+        /// Vault-retained fee on settled queued shares in bps (0..=1000; zero disables).
         #[arg(long)]
         queued_redeem_fee_bps: Option<u16>,
         /// Onboard a NEW asset row: the mint address. Stales the cached AUM —
@@ -410,6 +410,9 @@ enum Cmd {
         /// Valuation and settlement age (0 = 15s; positive values up to u32::MAX).
         #[arg(long, value_name = "SECS", requires = "asset_index")]
         asset_max_staleness: Option<i64>,
+        /// Hand-priced row's drift cap per window, 1..=200 bps (default 200).
+        #[arg(long, value_name = "BPS", requires = "asset_index", value_parser = clap::value_parser!(u16).range(1..=200))]
+        asset_max_drift_bps: Option<u16>,
         /// Maximum future timestamp skew for this asset; 0 rejects all future timestamps.
         #[arg(long, requires = "asset_index")]
         asset_max_future_skew: Option<u32>,
@@ -1608,7 +1611,6 @@ fn run_redeem_direct(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
     let user_pk = user_kp.pubkey();
     let base_mint = addr(&st.base_mint)?;
     let share = addr(&st.share_mint)?;
-    let curator = addr(&st.curator)?;
     let authority = addr(&st.authority)?;
     let base_token_program = mint_token_program(url, &base_mint)?;
     let token_2022 = addr(TOKEN_2022)?;
@@ -1627,19 +1629,14 @@ fn run_redeem_direct(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
             &base_mint,
             &base_token_program,
         ),
-        curator_share_account: derive_associated_token_account(&curator, &share, &token_2022),
+        curator_share_account: authority,
         base_token_program,
         shares,
         min_out,
     }
     .into_instruction();
     wait_fresh_oracles(url, &st.oracles()?)?;
-    let ixs = [
-        vec![create_ata_ix(user_pk, curator, share, token_2022)],
-        validate_ixs(&st, url, user_pk)?,
-        vec![ix],
-    ]
-    .concat();
+    let ixs = [validate_ixs(&st, url, user_pk)?, vec![ix]].concat();
     println!(
         "redeemed {shares} shares instantly ({})",
         send_opts(url, &ixs, &[&user_kp], &[], true)?
@@ -1719,6 +1716,7 @@ fn run_update_vault(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
         max_deployed,
         asset_deployed,
         asset_max_staleness,
+        asset_max_drift_bps,
         asset_max_future_skew,
         asset_deposit_enabled,
         asset_report_decimals,
@@ -1888,6 +1886,7 @@ fn run_update_vault(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
             quote_report_decimals: asset_quote_report_decimals,
             index,
             max_staleness_seconds: asset_max_staleness,
+            max_drift_bps: asset_max_drift_bps,
             max_future_skew_seconds: asset_max_future_skew,
             deposit_enabled: asset_deposit_enabled,
             max_deployed,
@@ -2221,8 +2220,7 @@ fn run_accept_curator(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
     }
     .into_instruction();
     let sig = send_opts(url, &[ix], &[&new_curator_kp], &[], false)?;
-    // The state file's `curator` feeds subsequent curator operations and the
-    // instant-redeem fee destination, so it must follow the on-chain rotation.
+    // Subsequent curator operations must follow the on-chain rotation.
     st.curator = new_curator_kp.pubkey().to_string();
     save_state(ctx.state_path, &st)?;
     println!("curator is now {} ({sig})", st.curator);
@@ -2780,6 +2778,27 @@ mod tests {
         assert_eq!(restored.additional_assets[0].custody, "manual-custody");
         assert_eq!(restored.additional_assets[0].oracle, None);
         assert_eq!(restored.oracles().unwrap(), [addr(&base).unwrap()]);
+    }
+
+    #[test]
+    fn update_vault_cli_bounds_asset_drift_and_requires_row() {
+        let parse = |args: &[&str]| {
+            Cli::try_parse_from(
+                ["vault", "update-vault", "--curator", "curator.json"]
+                    .into_iter()
+                    .chain(args.iter().copied()),
+            )
+        };
+        for cap in ["1", "50", "200"] {
+            let cli = parse(&["--asset-index", "1", "--asset-max-drift-bps", cap]).unwrap();
+            assert!(matches!(cli.cmd, Cmd::UpdateVault {
+                asset_index: Some(1), asset_max_drift_bps: Some(value), ..
+            } if value == cap.parse::<u16>().unwrap()));
+        }
+        for cap in ["0", "201", "65535"] {
+            assert!(parse(&["--asset-index", "1", "--asset-max-drift-bps", cap]).is_err());
+        }
+        assert!(parse(&["--asset-max-drift-bps", "50"]).is_err());
     }
 
     #[test]

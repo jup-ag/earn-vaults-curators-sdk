@@ -12,7 +12,8 @@ use {
 
 /// `price_opaque` — a curator or `permissions::vault::PRICE` delegate posts
 /// `(slot, value)` into `Vault.positions[slot]`. Delegate marks obey the
-/// configured drift/bootstrap guard; curator non-debt marks are outright.
+/// configured drift/bootstrap guard. Curator non-debt marks are outright while
+/// both `Pause::Subscribe` and `Pause::Redeem` are set, and drift-guarded otherwise.
 ///
 /// With `ASSET_TARGET` set on `slot` the same call writes
 /// `Vault.assets[idx].last_price` instead — the hand-priced-row path, drift-

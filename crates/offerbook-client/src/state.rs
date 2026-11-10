@@ -429,32 +429,6 @@ unsafe impl<'de, C: wincode::config::Config> SchemaRead<'de, C> for AssetFilter 
 }
 
 #[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
-pub struct BaseAssetV1 {
-    pub key: Key,
-    pub owner: Address,
-    pub update_authority: UpdateAuthority,
-    pub name: String,
-    pub uri: String,
-    pub seq: Option<u64>,
-}
-
-impl BaseAssetV1 {
-    /// On-chain account discriminator.
-    pub const DISCRIMINATOR: [u8; 1] = [1];
-
-    /// Verify the discriminator and deserialize the account data.
-    ///
-    /// Returns `None` if the discriminator does not match or the payload
-    /// fails to decode.
-    pub fn from_account_data(data: &[u8]) -> Option<Self> {
-        // The discriminator is the struct's key field, not a separate prefix.
-        data.strip_prefix(Self::DISCRIMINATOR.as_slice())?;
-        let payload = data;
-        wincode::config::deserialize(payload, crate::BorshConfig::new()).ok()
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
 pub struct ClassicNftAsset {
     pub mint: Address,
     pub token_program: Address,
@@ -679,16 +653,6 @@ pub struct FillTokenPrincipalOfferParams {
 pub struct FirstVerifiedCreatorFilter {
     pub creator: Address,
     pub reserved: [u8; 232],
-}
-
-#[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
-pub enum Key {
-    Uninitialized,
-    AssetV1,
-    HashedAssetV1,
-    PluginHeaderV1,
-    PluginRegistryV1,
-    CollectionV1,
 }
 
 #[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
@@ -1468,13 +1432,6 @@ pub struct TokenPrincipalOfferParams {
     /// When set, only this wallet may fill the offer (a private offer).
     /// `None` leaves the offer public.
     pub whitelisted_taker: Option<Address>,
-}
-
-#[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]
-pub enum UpdateAuthority {
-    None,
-    Address(Address),
-    Collection(Address),
 }
 
 #[derive(Debug, Clone, PartialEq, SchemaWrite, SchemaRead)]

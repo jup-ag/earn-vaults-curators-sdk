@@ -2,7 +2,7 @@
 
 Rust SDK and CLI for earn vault curators.
 
-Synced with earn vault program commit `4b20d514b2f40ca871903f441c6c93403944ccd8`.
+Synced with earn vault program commit `9b5f38c82d4cdbd2b468afdc12a0651381637632`.
 
 - [CLI usage](crates/cli/README.md)
 - [Offerbook client](crates/offerbook-client/README.md)

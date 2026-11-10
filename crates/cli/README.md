@@ -24,7 +24,12 @@ limit. Without `--compute-limit`, v1 requests 200k CU per instruction, capped at
 
 Share names now accept up to 50 UTF-8 bytes (symbols 5, URIs 200). Initialization
 and metadata-update payloads grow by 25 bytes: deploy matching program and clients.
-Existing vault accounts and share mints on `3ea4f47` need no data migration.
+The metadata change alone needs no account migration. The current manual-asset
+drift layout does require migration; see the [compatibility notes](../../docs/compatibility.md).
+
+Set a manual asset's drift cap with `update-vault --curator KEYPAIR
+--asset-index N --asset-max-drift-bps BPS` (1..=200, default 200). Revalidate AUM
+after changing it. Deposit headroom uses the largest active manual row cap.
 
 To export an unsigned emergency pause instruction for the upgrade multisig:
 
@@ -107,12 +112,15 @@ payout mint). `Escrow` retains discriminator 3 and the same PDA, with its
 (150 bytes total). Update account consumers for the extended layout.
 
 Set `--queued-redeem-fee-bps 75` on `init-vault` or `update-vault` to charge
-0.75% of settled queued shares for the curator. Initialization defaults to zero;
+0.75% of settled queued shares, retained in the vault for remaining live and queued
+holders. Initialization defaults to zero;
 omitting the update flag leaves the rate unchanged, and passing zero disables
 it. The allowed range is 0..=1,000 bps. `show` includes the configured rate.
 Each fill uses the current rate, including requests queued before a rate change;
-`min_out` applies to net proceeds. Fulfillment supplies the curator fee account
-automatically, with the delegate paying rent if it needs creation.
+`min_out` applies to net proceeds. A request covering all remaining effective
+supply pays no fee, including on partial fills. Fulfillment needs no fee accounts.
+Instant exit fees also stay in the vault; the final exit pays no fee and the CLI
+no longer creates a curator share ATA.
 
 ## Offerbook routes
 

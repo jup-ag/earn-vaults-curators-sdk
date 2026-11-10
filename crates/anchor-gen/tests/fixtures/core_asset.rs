@@ -1,4 +1,4 @@
-use offerbook_client::{
+use core_fixture::{
     deserialize_exact,
     solana_address::Address,
     state::{BaseAssetV1, Key, UpdateAuthority},
