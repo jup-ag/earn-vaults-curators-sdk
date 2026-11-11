@@ -4,7 +4,7 @@
 //! a donation attack cost ~`VS`× the target.
 
 use crate::{
-    constants::{NAV_SCALE, VIRTUAL_ASSETS, VIRTUAL_SHARES},
+    constants::{MAX_ENTRY_PREMIUM_BPS, NAV_SCALE, VIRTUAL_ASSETS, VIRTUAL_SHARES},
     errors::VaultError,
 };
 
@@ -13,6 +13,26 @@ use crate::{
 fn mul_div(a: u64, b: u128, c: u128) -> Result<u64, VaultError> {
     let numerator = (a as u128).checked_mul(b).ok_or(VaultError::AumOverflow)?;
     u64::try_from(numerator / c).map_err(|_| VaultError::AumOverflow)
+}
+
+/// Price a deposit at `aum + headroom`, refusing it when paying that reserve
+/// would lift the share price by more than [`MAX_ENTRY_PREMIUM_BPS`]. The
+/// entrant gives up `deposit · headroom / (aum + headroom + deposit)` to the
+/// existing holders, so NAV rises by that premium over `aum`. A small enough
+/// deposit always prices, whatever reserve the book carries.
+#[inline]
+pub fn deposit_pricing_aum(aum: u64, headroom: u64, deposit: u64) -> Result<u64, VaultError> {
+    let entry_aum = aum.checked_add(headroom).ok_or(VaultError::AumOverflow)?;
+    let premium = mul_div(
+        deposit,
+        u128::from(headroom),
+        (u128::from(entry_aum) + u128::from(deposit)).max(1),
+    )?;
+    // Reject rather than clamp: the full reserve protects against stale-price arbitrage.
+    if u128::from(premium) * 10_000 > u128::from(aum) * u128::from(MAX_ENTRY_PREMIUM_BPS) {
+        return Err(VaultError::EntryPremiumExceeded);
+    }
+    Ok(entry_aum)
 }
 
 /// `shares = deposit · (supply + VS) / (aum + VA)`.
@@ -133,6 +153,70 @@ mod proofs {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deposit_premium_boundary_and_extremes() {
+        const AUM: u64 = 1_000_000;
+        let exceeded = Err(VaultError::EntryPremiumExceeded);
+        // A reserve within the limit prices any size.
+        assert_eq!(deposit_pricing_aum(AUM, 10_000, u64::MAX), Ok(1_010_000));
+        // Just above it, a book-sized deposit still prices and a huge one is refused.
+        assert_eq!(deposit_pricing_aum(AUM, 10_100, AUM), Ok(1_010_100));
+        assert_eq!(deposit_pricing_aum(AUM, 10_100, 1 << 40), exceeded);
+        // A reserve of half the book never closes entry; it shrinks what fits.
+        assert_eq!(deposit_pricing_aum(AUM, AUM / 2, 20_000), Ok(1_500_000));
+        assert_eq!(deposit_pricing_aum(AUM, AUM / 2, 40_000), exceeded);
+        assert_eq!(
+            deposit_pricing_aum(AUM, u64::MAX / 2, 1),
+            Ok(AUM + u64::MAX / 2)
+        );
+        assert_eq!(deposit_pricing_aum(0, 0, 0), Ok(0));
+        assert_eq!(
+            deposit_pricing_aum(u64::MAX, 1, 0),
+            Err(VaultError::AumOverflow)
+        );
+    }
+
+    /// No admitted deposit lifts the share price past the limit, whatever the
+    /// reserve, book or deposit size.
+    #[test]
+    fn admitted_deposits_bound_the_share_price_move() {
+        let mut x = 0x9E3779B97F4A7C15u64;
+        let mut rng = move |bits: u32| {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x >> (64 - 1 - x % u64::from(bits)) as u32
+        };
+        let mut admitted = 0;
+        for _ in 0..200_000 {
+            let aum = 1_000_000 + rng(40);
+            let supply = 1_000_000 + rng(40);
+            let (headroom, deposit) = (rng(44), rng(48));
+            let Ok(entry_aum) = deposit_pricing_aum(aum, headroom, deposit) else {
+                continue;
+            };
+            let Ok(shares) = shares_for_deposit(deposit, supply, entry_aum) else {
+                continue;
+            };
+            admitted += 1;
+            let before = (
+                u128::from(aum) + VIRTUAL_ASSETS,
+                u128::from(supply) + VIRTUAL_SHARES,
+            );
+            let after = (
+                before.0 + u128::from(deposit),
+                before.1 + u128::from(shares),
+            );
+            // after.0 / after.1 <= before.0 / before.1 · (1 + limit), plus 1 bp of flooring.
+            assert!(
+                after.0 * before.1 * 10_000
+                    <= before.0 * after.1 * u128::from(10_000 + MAX_ENTRY_PREMIUM_BPS + 1),
+                "aum={aum} supply={supply} headroom={headroom} deposit={deposit}"
+            );
+        }
+        assert!(admitted > 20_000, "sweep admitted only {admitted}");
+    }
 
     #[test]
     fn bootstrap_mint_yields_virtual_share_multiple() {

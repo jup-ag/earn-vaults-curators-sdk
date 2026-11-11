@@ -63,6 +63,8 @@ pub enum VaultError {
     RedeemPayoutMintMismatch,
     /// A `ProtocolPolicy` account names another vault, protocol or key.
     PolicyMismatch,
+    /// The deposit's pricing reserve would lift the share price past the entry-premium limit.
+    EntryPremiumExceeded,
 }
 
 impl From<VaultError> for ProgramError {
@@ -207,6 +209,9 @@ impl ToStr for VaultError {
             Self::RedeemPayoutMintMismatch => "Redeem payout mint differs from the user's request",
             Self::PolicyMismatch => {
                 "the ProtocolPolicy account does not belong to this vault, protocol and key"
+            }
+            Self::EntryPremiumExceeded => {
+                "Deposit pricing reserve would lift the share price past the entry-premium limit"
             }
         }
     }

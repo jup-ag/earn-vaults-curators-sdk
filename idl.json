@@ -6709,6 +6709,12 @@
         "name": "policyMismatch",
         "code": 247,
         "message": ""
+      },
+      {
+        "kind": "errorNode",
+        "name": "entryPremiumExceeded",
+        "code": 248,
+        "message": ""
       }
     ]
   }

@@ -114,6 +114,10 @@ pub const MAX_LIQ_SLIPPAGE_PER_WINDOW_BPS: u128 = 1_000;
 /// mark and last validated net AUM — blocks walking a mark for stale-NAV arb.
 pub const MAX_DRIFT_BPS: u64 = 200; // 2% per staleness window
 
+/// Maximum share-price lift from one deposit's pricing reserve: the premium
+/// the entrant pays existing holders, over pre-deposit fee-net AUM (1%).
+pub const MAX_ENTRY_PREMIUM_BPS: u64 = 100;
+
 /// The drift budget a stored bps window resolves to: `0` is the global default
 /// ([`MAX_DRIFT_BPS`]), the waiver sentinel is `None` — no budget to enforce at
 /// all — and anything else is itself.
