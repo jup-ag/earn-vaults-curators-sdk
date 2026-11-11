@@ -1,6 +1,34 @@
 # Compatibility notes
 
-Synced with earn vault program commit `9b5f38c82d4cdbd2b468afdc12a0651381637632`.
+Synced with earn vault program commit `883da7d59b59670e999f04f14423f49f2fd6def4`.
+
+## Deposit entry premium and unmarked positions (`883da7d`)
+
+Non-bootstrap `SubscribeDirect` and queued `Fulfill` now reject
+`PricedSlotMissing` while any enabled, AUM-required, non-debt position has never
+been marked or has been reset. Attest its first mark (zero for an empty slot),
+then revalidate AUM before retrying. Unmarked credit positions no longer add
+first-mark headroom to the entry reserve; marked credits still reserve one
+drift window, alongside manual-asset, sink and debt reserves.
+
+The new `nav::deposit_pricing_aum(aum, headroom, deposit)` helper, also exported
+through `earn_vaults_sdk::nav`, returns the checked `aum + headroom` pricing
+basis or `VaultError::EntryPremiumExceeded` (custom error `248`). Pass
+pre-deposit fee-net AUM, the complete entry reserve and the deposit's numeraire
+value. The program rejects when the floored premium
+`deposit * headroom / (aum + headroom + deposit)` exceeds
+`aum * MAX_ENTRY_PREMIUM_BPS / 10_000`, with the limit fixed at `100` (1%).
+The reserve is never clamped. Smaller deposits may fit; each deposit is checked
+independently, so their cumulative premium is not capped. A rejected queued
+fulfillment leaves the request intact and cancellable. Clean bootstrap bypasses
+the premium check; zero-supply re-entry with residual backing remains guarded.
+
+Account layouts, instruction tags, payloads, account metas and event encodings
+are unchanged from `9b5f38c`; this update needs no additional account migration.
+The IDL adds the new error. Use the matching program for these deposit guards;
+updating this SDK alone does not enforce them on-chain. Rolling back the program
+also restores the previous entry behavior. See the
+[upstream technical reference](https://github.com/jup-ag/earn-vaults-programs/blob/883da7d59b59670e999f04f14423f49f2fd6def4/docs/technical-reference.md).
 
 ## Manual-asset drift, retained exit fees and Nest collateral (`9b5f38c`)
 
