@@ -1,6 +1,9 @@
 # Compatibility notes
 
-Synced with earn vault program commit `883da7d59b59670e999f04f14423f49f2fd6def4`.
+Synced with earn vault program commit `2ef07b09f0b74100f513fd1a05d65b9df9d5b932`.
+
+The Pyth Pro table now maps `3965` (Crypto.USDGO/USD) to Core/Hermes ID
+`132bd4124c09eda25aede536670eb9788b03cfb8493fe0fe517bfa0c7376ca5e`.
 
 ## Deposit entry premium and unmarked positions (`883da7d`)
 
