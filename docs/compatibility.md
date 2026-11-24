@@ -1,6 +1,29 @@
 # Compatibility notes
 
-Synced with earn vault program commit `883da7d59b59670e999f04f14423f49f2fd6def4`.
+Synced with earn vault program commit `b0fff7bce39b37641bbfd55b7329aa38fa7f46b8`.
+
+## Program 0.2.0 (`b0fff7b`)
+
+Rebuild clients for `InitializeVault` and `UpdateVault`. The new program
+requires an appended `max_aum` field. It is an 8-byte `u64` for initialization
+and a 9-byte fixed `Option<u64>` for updates. The cap is measured in numeraire
+micro-units. Zero removes the cap and an omitted update leaves it unchanged.
+`SubscribeDirect` and queued `Fulfill` return `AumCapExceeded` (249) if the
+deposit takes AUM above the cap. The account stays 2,334 bytes. The new
+`prices_changed_at`, `composed_precision`, and `max_aum` fields use zeroed
+reserved space in accounts already on that layout.
+
+To resume CCIP sends on an SVM lane, close the old 40-byte policy and create the
+72-byte `SvmCcipLane` policy with the lane and its destination token owner.
+The SVM send must carry `SVMExtraArgsV1` with that owner. EVM sends continue to
+use the 40-byte `CcipLane` policy.
+
+For direct share flows on vaults with required JupiterLend positions, keepers
+refresh prices, attest with `PriceOpaque`, then run `ValidateAum`. Direct CLI
+transactions validate against the cached prices for those vaults. Redemptions
+can return `FeeDebtAboveCap` (250). Crystallize fees before retrying a
+non-final exit that leaves more fee debt than half the remaining AUM.
+See the [changelog](../CHANGELOG.md) for the full program changes.
 
 ## Deposit entry premium and unmarked positions (`883da7d`)
 

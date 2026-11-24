@@ -11,9 +11,9 @@ cargo build --bin earn-vaults
 watch -n5 ./target/debug/earn-vaults show <vault>
 ```
 
-`show` prints the existing `VaultSnapshot` with named fields, assets, positions,
-and fees. It reads directly from the vault address, without a state file or
-keypair. Add `--user <pubkey>` to include that investor's shares and redeem value.
+`show` prints the `VaultSnapshot` with named fields, assets, positions, fees, and
+the configured `max_aum`. It reads directly from the vault address without a state
+file or keypair. Add `--user <pubkey>` to include that investor's shares and redeem value.
 Use `--rpc <url>` or `SOLANA_RPC_URL` to select the cluster (default: mainnet).
 
 Transactions without lookup tables use v1 (up to 4096 bytes). Supplying
@@ -30,6 +30,10 @@ drift layout does require migration; see the [compatibility notes](../../docs/co
 Set a manual asset's drift cap with `update-vault --curator KEYPAIR
 --asset-index N --asset-max-drift-bps BPS` (1..=200, default 200). Revalidate AUM
 after changing it. Deposit headroom uses the largest active manual row cap.
+
+Set `--max-aum <micro-numeraire>` on `init-vault` or `update-vault` to cap
+post-deposit AUM. Initialization defaults to zero (uncapped). For updates,
+omit the flag to preserve the cap or pass zero to remove it.
 
 To export an unsigned emergency pause instruction for the upgrade multisig:
 
@@ -86,6 +90,11 @@ the OFT store and receipt mint to bind the route. `--nest-route disabled` closes
 a bound route. Management/performance fee updates automatically include the
 share mint required by the upgraded program.
 
+For an SVM CCIP lane, pass `update-vault --ccip-lane CHAIN_SELECTOR:MESSAGE_RECEIVER:TOKEN_OWNER`
+with base58 keys. To convert a 40-byte lane to the SVM format, first close the
+old policy with `update-vault --ccip-lane disabled`. EVM lanes use
+`CHAIN_SELECTOR:RECEIVER`.
+
 Amounts are raw integers: USD values use 6 decimals, token balances use the
 asset's `decimals`, and NAV/HWM use the interface's `NAV_SCALE` fixed point.
 Timestamps are Unix seconds; `last_priced_at` records the last on-chain pricing,
@@ -95,6 +104,9 @@ For direct settlement, pass `subscribe --min-shares-out <raw-shares>` or
 `redeem-direct --min-out <raw-base-tokens>` to bound the output. Both default
 to zero (unbounded); use a minimum derived from your quote and slippage
 tolerance for protection against execution-time price or fee changes.
+If the vault has a required JupiterLend position, the CLI uses the keeper's
+cached prices. The keeper refreshes prices and then re-attests the position
+before direct settlement.
 
 Both direct instructions now encode 17 bytes (tag, input, minimum), replacing
 the previous 9-byte encoding. Coordinate the program upgrade with every

@@ -64,6 +64,8 @@ pub struct InitializeVault<'a> {
     /// Ceiling on the transient flash liability, in numéraire micro-units. `0`
     /// leaves the path disabled.
     pub max_flash_liability: u64,
+    /// Ceiling on post-deposit AUM in numéraire micro-units; `0` = no cap.
+    pub max_aum: u64,
     /// Discount `validate_aum` applies to every sink mark.
     pub sink_haircut_bps: u16,
     /// Freshness window every sink mark is held to. `None` = the global
@@ -71,7 +73,7 @@ pub struct InitializeVault<'a> {
     /// (capped at that week, so the argument is 32-bit).
     pub sink_max_staleness_seconds: Option<u32>,
     /// Vault-wide ceiling on aggregate first sink marks, in bps of validated
-    /// AUM. `None` or `Some(0)` uses the global default; `Some(u16::MAX)` waives
+    /// AUM net of existing sink marks. `None` or `Some(0)` uses the global default; `Some(u16::MAX)` waives
     /// the ceiling; other `Some(n)` = `n` bps. Later marks use the global walk budget.
     pub sink_bootstrap_cap_bps: Option<u16>,
     /// How many sink slots may be claimed, up to `MAX_SINKS`. `0` leaves
@@ -193,6 +195,7 @@ impl InitializeVault<'_> {
             instant_redeem_fee_bps: pod_opt(self.instant_redeem_fee_bps),
             queued_redeem_fee_bps: self.queued_redeem_fee_bps.into(),
             max_flash_liability: self.max_flash_liability.into(),
+            max_aum: self.max_aum.into(),
             sink_haircut_bps: self.sink_haircut_bps.into(),
             sink_max_staleness_seconds: pod_opt(self.sink_max_staleness_seconds),
             sink_bootstrap_cap_bps: pod_opt(self.sink_bootstrap_cap_bps),
@@ -259,6 +262,7 @@ mod tests {
             performance_fee_bps: 200,
             instant_redeem_fee_bps: None,
             max_flash_liability: 0,
+            max_aum: 0,
             sink_haircut_bps: 0,
             sink_max_staleness_seconds: None,
             sink_bootstrap_cap_bps: None,
@@ -270,21 +274,26 @@ mod tests {
     }
 
     #[test]
-    fn queued_fee_is_appended_to_initialization_bytes() {
+    fn queued_fee_precedes_max_aum_in_initialization_bytes() {
         use wincode::Deserialize;
 
         for fee in [0, 75, 1_000] {
             let mut init = fixture();
             init.queued_redeem_fee_bps = fee;
+            init.max_aum = 250_000_000_000;
+            let max_aum = init.max_aum;
             let ix = init.into_instruction().unwrap();
-            assert_eq!(&ix.data[ix.data.len() - 2..], &fee.to_le_bytes());
+            let cap_offset = ix.data.len() - 8;
+            assert_eq!(&ix.data[cap_offset - 2..cap_offset], &fee.to_le_bytes());
+            assert_eq!(&ix.data[cap_offset..], &max_aum.to_le_bytes());
             let VaultInstruction::InitializeVault { args } =
                 VaultInstruction::deserialize(&ix.data).unwrap()
             else {
                 panic!("wrong instruction");
             };
             assert_eq!(args.queued_redeem_fee_bps.get(), fee);
-            assert!(VaultInstruction::deserialize(&ix.data[..ix.data.len() - 2]).is_err());
+            assert_eq!(args.max_aum.get(), max_aum);
+            assert!(VaultInstruction::deserialize(&ix.data[..cap_offset]).is_err());
         }
     }
 

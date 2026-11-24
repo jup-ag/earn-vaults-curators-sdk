@@ -29,6 +29,7 @@ use {
 ///   rotation path for a deprecated Pyth feed).
 /// - `position_update`: rewrite part of a position's risk parameters.
 /// - `max_flash_liability`: transient liability cap; `0` disables it.
+/// - `max_aum`: vault-wide post-deposit AUM cap; `0` removes it.
 /// - `sink_*`: seized-collateral capacity, pricing, and release controls.
 ///
 /// Fee updates append the readonly share mint after any asset accounts so the
@@ -52,6 +53,8 @@ pub struct UpdateVault {
     pub position_update: Option<PositionUpdateFields>,
     /// Transient liability cap in numéraire micro-units.
     pub max_flash_liability: Option<u64>,
+    /// Ceiling on post-deposit AUM in numéraire micro-units; `Some(0)` removes it.
+    pub max_aum: Option<u64>,
     /// Validated AUM age limit; Some(0) resets to 60s. Does not relax oracle limits.
     pub max_aum_staleness_seconds: Option<u32>,
     /// Discount `validate_aum` applies to every sink mark.
@@ -59,7 +62,7 @@ pub struct UpdateVault {
     /// Freshness window every sink mark is held to; `0` = the global default.
     pub sink_max_staleness_seconds: Option<u64>,
     /// Vault-wide ceiling on aggregate first sink marks, in bps of validated
-    /// AUM; `0` selects the global default, `u16::MAX` waives the ceiling,
+    /// AUM net of existing sink marks; `0` selects the global default, `u16::MAX` waives the ceiling,
     /// and `None` leaves it unchanged. Later marks use the global walk budget.
     pub sink_bootstrap_cap_bps: Option<u16>,
     /// How many sink slots may be claimed, up to `MAX_SINKS`. `Some(0)` stops
@@ -238,6 +241,7 @@ impl UpdateVault {
             asset: pod_opt(self.asset_update.as_ref().map(|a| a.to_wire())),
             position: pod_opt(self.position_update.as_ref().map(|p| p.to_wire())),
             max_flash_liability: pod_opt(self.max_flash_liability),
+            max_aum: pod_opt(self.max_aum),
             max_aum_staleness_seconds: pod_opt(self.max_aum_staleness_seconds),
             sink_haircut_bps: pod_opt(self.sink_haircut_bps),
             sink_max_staleness_seconds: pod_opt(self.sink_max_staleness_seconds),
@@ -335,6 +339,7 @@ mod tests {
                 reset: Some(true),
             }),
             max_flash_liability: Some(10_000),
+            max_aum: Some(7_000_000),
             sink_haircut_bps: Some(100),
             sink_max_staleness_seconds: Some(600),
             sink_bootstrap_cap_bps: Some(250),
@@ -368,6 +373,7 @@ mod tests {
 
         assert_eq!(args.max_aum_staleness_seconds.get().unwrap().get(), 900);
         assert_eq!(args.queued_redeem_fee_bps.get().unwrap().get(), 75);
+        assert_eq!(args.max_aum.get().unwrap().get(), 7_000_000);
         assert_eq!(args.paused.get(), Some(4));
         assert_eq!(args.timelock_delay.get().map(|value| value.get()), Some(0));
         assert_eq!(asset.index, 2);

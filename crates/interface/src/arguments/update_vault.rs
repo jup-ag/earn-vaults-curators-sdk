@@ -239,7 +239,7 @@ pub struct UpdateVaultArgs {
     #[codama(type = option(number(u64, le), fixed))]
     pub sink_max_staleness_seconds: PodOption<U64>,
     /// Vault-wide ceiling on aggregate first sink marks, in bps of validated
-    /// AUM; `0` selects the global default, `u16::MAX` waives the ceiling,
+    /// AUM net of existing sink marks; `0` selects the global default, `u16::MAX` waives the ceiling,
     /// and `None` leaves it unchanged. Later marks are held to `MAX_DRIFT_BPS`
     /// per window.
     #[codama(type = option(number(u16, le), fixed))]
@@ -292,6 +292,10 @@ pub struct UpdateVaultArgs {
     /// Vault-retained fee at queued settlement; Some(0) disables, capped at 1,000 bps.
     #[codama(type = option(number(u16, le), fixed))]
     pub queued_redeem_fee_bps: PodOption<U16>,
+    /// Ceiling on post-deposit AUM in numéraire micro-units; `Some(0)` removes
+    /// the cap (unlike `max_deposit`, where `0` disables deposits).
+    #[codama(type = option(number(u64, le), fixed))]
+    pub max_aum: PodOption<U64>,
 }
 
 impl ZcValidate for UpdateVaultArgs {
@@ -318,6 +322,7 @@ impl ZcValidate for UpdateVaultArgs {
         ZcValidate::validate_ref(&value.asset_max_future_skew_seconds)?;
         ZcValidate::validate_ref(&value.max_aum_staleness_seconds)?;
         ZcValidate::validate_ref(&value.queued_redeem_fee_bps)?;
+        ZcValidate::validate_ref(&value.max_aum)?;
         Ok(())
     }
 }

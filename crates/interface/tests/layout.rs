@@ -1,7 +1,7 @@
 use {
     earn_vaults_interface::{
         VaultInstruction,
-        arguments::{UpdateShareMetaArgs, UpdateVaultArgs},
+        arguments::{InitializeVaultArgs, UpdateShareMetaArgs, UpdateVaultArgs},
         encoding::{PodOption, PodString},
         state::{Account, Delegate, Escrow, Vault},
         zeropod::U64,
@@ -29,6 +29,7 @@ fn unaligned_accounts_preserve_pinned_field_offsets() {
     }
     vault.nest_receipt_mint = Address::new_from_array([7; 32]);
     vault.queued_redeem_fee_bps = 200u16.into();
+    vault.prices_changed_at = 789i64.into();
     assert_eq!(&bytes.0[2 + 136..2 + 144], &123u64.to_le_bytes());
     let drift_offset = 2 + 256 + 7 * 181 + 74;
     assert_eq!(
@@ -46,7 +47,8 @@ fn unaligned_accounts_preserve_pinned_field_offsets() {
     }
     assert_eq!(&bytes.0[2 + 2171..2 + 2203], &[7; 32]);
     assert_eq!(&bytes.0[2 + 2203..2 + 2205], &200u16.to_le_bytes());
-    assert_eq!(&bytes.0[2 + 2205..], &[0; 128]);
+    assert_eq!(&bytes.0[2 + 2205..2 + 2213], &789i64.to_le_bytes());
+    assert_eq!(&bytes.0[2 + 2213..], &[0; 120]);
     let vault = Vault::read(&bytes.0[1..]).unwrap();
     assert_eq!(vault.aum.get(), 123);
     assert_eq!(wincode::serialize(vault).unwrap(), bytes.0[2..]);
@@ -62,6 +64,57 @@ fn unaligned_accounts_preserve_pinned_field_offsets() {
     assert!(Vault::read(&bytes.0).is_err());
     bytes.0[1] = 0;
     assert!(Vault::read(&bytes.0[1..]).is_err());
+}
+
+/// `max_aum` is carved from the front of the old 56-byte reserved tail, so an
+/// account written before the field existed reads it as zero (no cap).
+#[test]
+fn pre_max_aum_accounts_decode_as_uncapped() {
+    const OLD_RESERVED: usize = 1 + 2_277;
+    // Every byte the old layout owned is set; its reserved tail was zeroed.
+    let mut bytes = [0xaau8; Vault::LEN];
+    bytes[0] = Vault::DISCRIMINATOR;
+    bytes[OLD_RESERVED..].fill(0);
+    let old = bytes;
+
+    let vault = Vault::read_mut(&mut bytes).unwrap();
+    assert_eq!(vault.max_aum.get(), 0);
+    assert_eq!(vault.require_aum_headroom(u64::MAX), Ok(()));
+    assert_eq!(vault.queued_redeem_fee_bps.get(), 0xaaaa);
+
+    // Writing it touches only the first eight formerly reserved bytes.
+    vault.max_aum = U64::new(u64::MAX);
+    assert_eq!(bytes[..OLD_RESERVED], old[..OLD_RESERVED]);
+    assert_eq!(bytes[OLD_RESERVED..OLD_RESERVED + 8], [0xff; 8]);
+    assert_eq!(bytes[OLD_RESERVED + 8..], [0; 48]);
+}
+
+/// Instruction args are fixed-size borrows: an encoding without the appended
+/// `max_aum` is rejected, so InitializeVault / UpdateVault clients must be
+/// rebuilt with the program. Trailing bytes are tolerated, so those clients
+/// can switch first.
+#[test]
+fn max_aum_args_are_appended_and_required() {
+    let init = [0u8; 1 + size_of::<InitializeVaultArgs>() + 8];
+    let len = init.len() - 8;
+    assert_eq!(
+        core::mem::offset_of!(InitializeVaultArgs, max_aum),
+        size_of::<InitializeVaultArgs>() - 8
+    );
+    assert!(VaultInstruction::deserialize(&init[..len]).is_ok());
+    assert!(VaultInstruction::deserialize(&init[..len - 8]).is_err());
+    assert!(VaultInstruction::deserialize(&init).is_ok());
+
+    let mut update = [0u8; 1 + size_of::<UpdateVaultArgs>() + 9];
+    update[0] = 1;
+    let len = update.len() - 9;
+    assert_eq!(
+        core::mem::offset_of!(UpdateVaultArgs, max_aum),
+        size_of::<UpdateVaultArgs>() - 9
+    );
+    assert!(VaultInstruction::deserialize(&update[..len]).is_ok());
+    assert!(VaultInstruction::deserialize(&update[..len - 9]).is_err());
+    assert!(VaultInstruction::deserialize(&update).is_ok());
 }
 
 #[test]
@@ -135,6 +188,7 @@ fn borrowed_instructions_validate_active_fixed_fields() {
         core::mem::offset_of!(UpdateVaultArgs, asset_max_future_skew_seconds),
         core::mem::offset_of!(UpdateVaultArgs, max_aum_staleness_seconds),
         core::mem::offset_of!(UpdateVaultArgs, queued_redeem_fee_bps),
+        core::mem::offset_of!(UpdateVaultArgs, max_aum),
     ] {
         update[1 + offset] = 2;
         assert!(VaultInstruction::deserialize(&update).is_err());

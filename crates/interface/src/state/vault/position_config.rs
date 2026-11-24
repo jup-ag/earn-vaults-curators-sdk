@@ -19,6 +19,12 @@ pub const POSITION_FLAG_INITIALIZED: u8 = 1 << 5;
 /// the mark, so it holds only Earn receipts, which no third party can
 /// liquidate.
 pub const POSITION_FLAG_LENDER_ONLY: u8 = 1 << 6;
+/// Set by a custody fold and cleared by the next mark. `PriceOpaque` re-attests
+/// a same-second fold at its execution value; a swap also clears `PRICED` but
+/// folds nothing, and must not take that path (GA-70). Program-owned, so not in
+/// [`POSITION_FLAG_CURATOR_MASK`]. The bit once held a retired debt latch: a
+/// leftover reads as a fold until the next mark clears it.
+pub const POSITION_FLAG_FOLDED: u8 = 1 << 7;
 pub const POSITION_FLAG_CURATOR_MASK: u8 = POSITION_FLAG_REQUIRED_IN_AUM
     | POSITION_FLAG_DEBT
     | POSITION_FLAG_ENABLED

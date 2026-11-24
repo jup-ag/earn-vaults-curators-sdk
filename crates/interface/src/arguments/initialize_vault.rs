@@ -113,7 +113,8 @@ pub struct InitializeVaultArgs {
     #[codama(type = option(number(u32, le), fixed))]
     pub sink_max_staleness_seconds: PodOption<U32>,
     /// `Vault.sink_bootstrap_cap_bps` — vault-wide ceiling on aggregate first
-    /// sink marks, in bps of validated AUM. `None` or `Some(0)` uses the global
+    /// sink marks, in bps of validated AUM net of existing sink marks. `None`
+    /// or `Some(0)` uses the global
     /// default; `Some(u16::MAX)` waives the ceiling; other `Some(n)` = `n` bps.
     #[codama(type = option(number(u16, le), fixed))]
     pub sink_bootstrap_cap_bps: PodOption<U16>,
@@ -129,6 +130,11 @@ pub struct InitializeVaultArgs {
     /// Vault-retained fee on settled queued shares; 0 disables, capped at 1,000 bps.
     #[codama(type = number(u16))]
     pub queued_redeem_fee_bps: U16,
+    /// `Vault.max_aum` — ceiling on post-deposit AUM in numéraire micro-units.
+    /// `0` means no cap (unlike `max_deposit`, where `0` disables deposits).
+    /// Appended so the pre-upgrade InitializeVault encoding remains a prefix.
+    #[codama(type = number(u64))]
+    pub max_aum: U64,
 }
 
 impl ZcValidate for InitializeVaultArgs {
