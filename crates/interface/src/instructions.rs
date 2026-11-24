@@ -15,6 +15,10 @@ use {
 };
 
 #[derive(CodamaInstructions)]
+#[allow(
+    clippy::duplicated_attributes,
+    reason = "Distinct Codama accounts may repeat signer and writable flags"
+)]
 #[repr(u8)]
 pub enum VaultInstruction<'de> {
     #[codama(account(name = "curator", signer, writable))]
