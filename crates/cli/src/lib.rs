@@ -379,6 +379,8 @@ pub struct VaultSnapshot {
     /// `Pause` bitmask: 1 subscribe, 2 redeem, 4 strategy.
     pub paused: u8,
     pub aum: u64,
+    /// Vault-wide post-deposit AUM cap in numeraire micro-units. Zero is uncapped.
+    pub max_aum: u64,
     pub last_priced_at: i64,
     pub timelock_delay: u64,
     /// Per-vault annual management fee minted to the curator.
@@ -428,18 +430,27 @@ fn token_amount(url: &str, method: &str, target: &Address) -> u64 {
     .unwrap_or(0)
 }
 
-/// Fetch and decode a vault straight from the cluster. `user`, if given, adds
-/// their share balance and pro-rata value.
-pub fn fetch_snapshot(url: &str, vault: Address, user: Option<Address>) -> Result<VaultSnapshot> {
+/// Fetch the bytes of an account owned by the vault program.
+pub fn fetch_vault_data(url: &str, vault: &Address) -> Result<Vec<u8>> {
     let v = rpc(
         url,
         "getAccountInfo",
         json!([vault.to_string(), {"encoding": "base64", "commitment": "confirmed"}]),
     )?;
-    let data_b64 = v["value"]["data"][0]
+    let account = &v["value"];
+    let data_b64 = account["data"][0]
         .as_str()
         .ok_or_else(|| anyhow!("vault {vault} not found"))?;
-    let data = B64.decode(data_b64)?;
+    if account["owner"].as_str() != Some(&earn_vaults_interface::ID.to_string()) {
+        bail!("vault {vault} has an unexpected program owner");
+    }
+    Ok(B64.decode(data_b64)?)
+}
+
+/// Fetch and decode a vault straight from the cluster. `user`, if given, adds
+/// their share balance and pro-rata value.
+pub fn fetch_snapshot(url: &str, vault: Address, user: Option<Address>) -> Result<VaultSnapshot> {
+    let data = fetch_vault_data(url, &vault)?;
     let vs = <Vault as StateAccount>::read(&data).map_err(|e| anyhow!("decode vault: {e:?}"))?;
 
     let share_mint = derive_share_mint(&vault);
@@ -514,6 +525,7 @@ pub fn fetch_snapshot(url: &str, vault: Address, user: Option<Address>) -> Resul
         created_at: vs.created_at.into(),
         paused: vs.paused,
         aum: vs.aum.get(),
+        max_aum: vs.max_aum.get(),
         last_priced_at: vs.last_priced_at.into(),
         timelock_delay: vs.timelock_delay.get(),
         management_fee_bps: vs.management_fee_bps.get(),

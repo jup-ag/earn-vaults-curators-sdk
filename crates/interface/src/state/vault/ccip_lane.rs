@@ -75,6 +75,36 @@ impl CcipLane {
 const _: () = assert!(core::mem::size_of::<CcipLane>() == 40);
 const _: () = assert!(core::mem::align_of::<CcipLane>() == 1);
 
+/// SVM-specific protocol-wide policy. The message receiver may be zero for a
+/// token-only transfer; the destination token owner must always be explicit.
+#[derive(SchemaRead, SchemaWrite, Clone, Copy, CodamaType)]
+#[wincode(assert_zero_copy)]
+#[repr(C)]
+pub struct SvmCcipLane {
+    pub lane: CcipLane,
+    pub token_receiver: Address,
+}
+
+impl ZcValidate for SvmCcipLane {
+    fn validate_ref(_: &Self) -> Result<(), ZeroPodError> {
+        Ok(())
+    }
+}
+
+// SAFETY: both fields have alignment one, no padding and no invalid bit patterns.
+unsafe impl ZcElem for SvmCcipLane {}
+
+impl SvmCcipLane {
+    pub fn validate(&self) -> Result<(), ProgramError> {
+        if !self.lane.enabled() || self.token_receiver == Address::default() {
+            return Err(ProgramError::InvalidArgument);
+        }
+        Ok(())
+    }
+}
+
+const _: () = assert!(core::mem::size_of::<SvmCcipLane>() == 72);
+
 #[cfg(test)]
 mod tests {
     use super::*;

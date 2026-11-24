@@ -129,8 +129,22 @@ pub struct Vault {
     /// Vault-retained fee on settled queued shares, in bps; zero disables it.
     #[codama(type = number(u16))]
     pub queued_redeem_fee_bps: U16,
+    /// Cluster time at which a cached asset price last advanced. A JupiterLend
+    /// mark stamped before it predates a price `validate_aum` now reads, so
+    /// permissionless share flows refuse it (GA-54). Zero means never.
+    #[codama(type = number(i64))]
+    pub prices_changed_at: I64,
+    /// Per asset [base, quote]: 0 = legacy/unknown, 1 = whole-second source,
+    /// 2 + fractional microseconds = Pyth Pro. Seconds remain in AssetConfig.
+    #[codama(type = array(array(number(u32), fixed_count(2)), fixed_count(8)))]
+    pub composed_precision: [[U32; 2]; 8],
+    /// Ceiling on `aum` after a deposit, in numéraire micro-units, enforced by
+    /// `SubscribeDirect` and `Fulfill`. `0` means no cap — the opposite of
+    /// `max_deposit`, because every pre-existing account reads zero here.
+    #[codama(type = number(u64))]
+    pub max_aum: U64,
     /// Zero-initialised room for future fields.
-    _reserved: [u8; 128],
+    _reserved: [u8; 48],
 }
 
 /// Fee assets removed from the vault's accrued liabilities by one
@@ -423,12 +437,18 @@ impl Vault {
             U128::from(u128::from(self.hwm_nav).max(self.nav_for_watermark(eff_supply, now)));
     }
 
-    /// Exclude issuance-driven NAV increases from performance fees without
-    /// lowering the HWM. Accrue pre-entry fees first, then apply the deposit or
-    /// fee debit and pass the post-mint supply. Nets folded fees and includes
-    /// pending redeem shares, so entry headroom and rounding are not returns.
-    /// For fee mints, independent recipient share floors would otherwise leave
-    /// a small apparent gain that a later performance-rate change could reprice.
+    /// Book a subscription without counting issuance-driven NAV lift toward recovery or fees.
+    #[inline]
+    pub fn record_subscription(&mut self, share_supply: u64, shares: u64, deposit: u64, now: i64) {
+        self.accrue_fees(share_supply, now);
+        let pre_nav = self.nav_for_watermark(self.eff_supply(share_supply), now);
+        self.set_aum(self.aum.get().saturating_add(deposit), now);
+        let post_nav = self.nav_for_watermark(self.eff_supply(share_supply + shares), now);
+        self.hwm_nav =
+            U128::from(u128::from(self.hwm_nav).saturating_add(post_nav.saturating_sub(pre_nav)));
+    }
+
+    /// Ratchet over independent recipient share floors after crystallization.
     #[inline]
     pub fn ratchet_hwm_after_mint(&mut self, share_supply: u64, now: i64) {
         let eff_supply = self.eff_supply(share_supply);
@@ -484,6 +504,56 @@ impl Vault {
                     .max(self.nav_for_watermark(eff_supply, now)),
             );
         }
+    }
+
+    /// Refuse an exit that leaves the fee debt above [`Self::fee_payable_cap`]
+    /// of the book it leaves behind (M-1). A redemption debits `aum` and
+    /// leaves the debt whole, backed by the assets the leaver did not take.
+    /// The cap cannot tell that shrink from a drawdown, so the next fold would
+    /// forgive the excess to whoever still holds shares. `CrystallizeFees`
+    /// mints the debt as shares, after which the exit passes.
+    ///
+    /// Call after the `aum` debit: `pre_exit_supply` is the effective supply
+    /// the exit started from, `share_supply` the mint supply it leaves. The
+    /// last exit is exempt: no share remains to collect a write-down. Reads
+    /// the stored debt, never the capped one, so staging the exit cannot
+    /// re-admit it.
+    ///
+    /// The gate stands only while that crystallization could mint (see
+    /// [`Self::fee_mint_blocked`]). Otherwise the exit passes: a holder's exit
+    /// outranks the fee claim. The waiver is for liveness only, so the redeem
+    /// does not write the debt down itself. It stays whole until the next
+    /// fold, which every later share flow reaches through a fresh
+    /// `ValidateAum`, and that fold forgives only what then exceeds the cap.
+    // ponytail: whole units, like `raw_fee_liability`. A streaming fraction
+    // under one micro-unit can still be trimmed at the exact boundary; the
+    // exact comparison would refuse dust exits on any fee-bearing vault.
+    #[inline]
+    pub fn require_fee_debt_payable(
+        &self,
+        pre_exit_supply: u64,
+        share_supply: u64,
+        now: i64,
+    ) -> Result<(), VaultError> {
+        if self.eff_supply(share_supply) != 0
+            && !self.fee_mint_blocked(pre_exit_supply)
+            && self.raw_fee_liability(share_supply, now) > self.fee_payable_cap()
+        {
+            return Err(VaultError::FeeDebtAboveCap);
+        }
+        Ok(())
+    }
+
+    /// Whether `CrystallizeFees` cannot mint against this book whatever the
+    /// caller does first. Either `ValidateAum` recorded an unrepresentable
+    /// confidence ratio, which every share mint refuses to price, or the fee
+    /// shares may not fit under `u64::MAX`. Fee debt is at most the fee-net
+    /// book once folded, so it mints at most `eff_supply + VIRTUAL_SHARES`
+    /// shares: at or below half the range the mint always has headroom.
+    #[inline]
+    pub fn fee_mint_blocked(&self, eff_supply: u64) -> bool {
+        self.aum_conf_bps.get() == u16::MAX
+            || eff_supply > (u64::MAX - crate::constants::VIRTUAL_SHARES as u64) / 2
     }
 
     /// Economic fee liability as of `now`: streaming plus folded and pending
@@ -604,9 +674,27 @@ impl Vault {
         Ok((fees, curator_shares, protocol_shares))
     }
 
+    /// Write `aum`, first settling both slippage buckets' refill at the
+    /// outgoing AUM. Every program write to `aum` goes through here (GA-64):
+    /// a bucket left unsettled would refill the whole elapsed interval at the
+    /// new AUM on its next charge. Each settlement floors away under one
+    /// numéraire micro-unit of refill, in the holders' favor. Refill is linear
+    /// at a constant AUM, so an unchanged value settles nothing: a
+    /// permissionless `ValidateAum` cannot floor the refill away by repetition.
+    #[inline]
+    pub fn set_aum(&mut self, aum: u64, now: i64) {
+        if aum != self.aum.get() {
+            // A zero charge only settles the refill; it cannot exceed the budget.
+            let _ = self.charge_swap_slippage(0, now);
+            let _ = self.charge_liquidation_slippage(0, now);
+        }
+        self.aum = U64::from(aum);
+    }
+
     /// Charge `slippage` against the swap leaky bucket, which refills linearly
-    /// at one current-AUM capacity per hour. Excess debt after an AUM shrink
-    /// can take longer to clear; window boundaries never reset spent slippage.
+    /// at one AUM capacity per hour, each interval at the AUM that held it
+    /// (see [`Self::set_aum`]). Excess debt after an AUM shrink can take
+    /// longer to clear; window boundaries never reset spent slippage.
     /// `MAX_SWAP_SLIPPAGE_BPS` bounds one hop, this bounds the sum.
     #[inline]
     pub fn charge_swap_slippage(&mut self, slippage: u64, now: i64) -> Result<(), VaultError> {
@@ -668,6 +756,18 @@ impl Vault {
             .ok_or(VaultError::AumOverflow)
     }
 
+    /// Refuse a deposit that would leave `aum` above `max_aum` (`0` = no cap).
+    /// Unlike the per-asset `max_deposit`, a swap out of the deposit mint
+    /// does not free this headroom.
+    #[inline]
+    pub fn require_aum_headroom(&self, post_deposit_aum: u64) -> Result<(), VaultError> {
+        let cap = self.max_aum.get();
+        if cap != 0 && post_deposit_aum > cap {
+            return Err(VaultError::AumCapExceeded);
+        }
+        Ok(())
+    }
+
     #[inline(always)]
     pub fn eff_aum(&self, share_supply: u64, now: i64) -> u64 {
         self.aum.get().saturating_sub(
@@ -686,11 +786,23 @@ impl Vault {
     /// around `validate_aum` in one transaction. Each mark's cap is based on the
     /// then-current AUM, so capacities compound rather than merely add. This is
     /// deliberately not described as protection for fee-free queued exits.
+    ///
+    /// The fee cushions one exit, not one holder. It is retained for the
+    /// remaining shares, so a redeemer recovers whatever its own remaining
+    /// shares hold of it. Against a holder of most of the supply leaving in
+    /// stages, the cushion is thinner than this budget assumes.
     #[inline]
     pub fn require_instant_mark_fee_safe(&self) -> Result<(), ProgramError> {
+        self.require_instant_marks_within(self.instant_redeem_fee_bps.get())
+    }
+
+    /// [`Self::require_instant_mark_fee_safe`] against the fee an exit actually
+    /// pays. `RedeemDirect` waives the fee on the final exit, so that exit must
+    /// pass at zero: no composed mark capacity at all (GA-65).
+    #[inline]
+    pub fn require_instant_marks_within(&self, fee_bps: u16) -> Result<(), ProgramError> {
         let unsafe_direct = || ProgramError::from(VaultError::InstantRedeemDisabled);
 
-        let fee_bps = self.instant_redeem_fee_bps.get();
         // A disabled instant exit is safe regardless of the strategy's mark
         // shape; queued issuance is protected separately by entry headroom.
         if fee_bps == u16::MAX {
@@ -713,7 +825,9 @@ impl Vault {
         // liquidation can lower that net value without invalidating our mark,
         // so its drift cap cannot protect an instant exit. A lender-only slot
         // is Earn-only: Fluid Vaults is refused at grant and at routing, so its
-        // mark holds unliquidatable Earn receipts and the drift cap below holds.
+        // mark holds unliquidatable Earn receipts and the drift cap below holds
+        // for delegate reports; `redeem_direct` separately requires the mark to
+        // postdate the last price-cache advance (GA-54).
         if self.positions.iter().any(|p| {
             p.enabled()
                 && p.required_in_aum()
@@ -768,6 +882,28 @@ impl Vault {
         }
         Ok(())
     }
+
+    /// Refuse instant redemption while the sinks credit more of the book than
+    /// the exit fee retains: `Σ sink credit × 10_000 > fee_bps × fee_net_aum`
+    /// (GA-67). [`Self::require_instant_mark_fee_safe`] bounds what one mark
+    /// can add, as a percentage of the AUM it was struck against. A sink mark
+    /// is a dollar total that keeps its value while a loss elsewhere shrinks
+    /// the book around it, so its current share is checked on every exit.
+    #[inline]
+    pub fn require_sink_value_fee_covered(&self, fee_net_aum: u64) -> Result<(), ProgramError> {
+        let haircut = u128::from(self.sink_haircut_bps.get());
+        // Per sink, exactly as `validate_aum` credits it.
+        let credit = self.sinks.iter().fold(0u128, |sum, sink| {
+            let mark = sink.value.get();
+            let cut = (u128::from(mark).saturating_mul(haircut) / 10_000) as u64;
+            sum + u128::from(mark.saturating_sub(cut))
+        });
+        let covered = u128::from(self.instant_redeem_fee_bps.get()) * u128::from(fee_net_aum);
+        if credit * 10_000 > covered {
+            return Err(VaultError::InstantRedeemDisabled.into());
+        }
+        Ok(())
+    }
 }
 
 /// `value × (1 + cap_bps / 10_000)`, rounded up. `None` is an arithmetic
@@ -819,7 +955,10 @@ const _: () = assert!(core::mem::size_of::<SinkSlot>() == 57);
 const _: () = assert!(core::mem::offset_of!(SinkSlot, balance) == 40);
 const _: () = assert!(core::mem::offset_of!(Vault, nest_receipt_mint) == 2_171);
 const _: () = assert!(core::mem::offset_of!(Vault, queued_redeem_fee_bps) == 2_203);
-const _: () = assert!(core::mem::offset_of!(Vault, _reserved) == 2_205);
+const _: () = assert!(core::mem::offset_of!(Vault, prices_changed_at) == 2_205);
+const _: () = assert!(core::mem::offset_of!(Vault, composed_precision) == 2_213);
+const _: () = assert!(core::mem::offset_of!(Vault, max_aum) == 2_277);
+const _: () = assert!(core::mem::offset_of!(Vault, _reserved) == 2_285);
 const _: () = assert!(core::mem::size_of::<AssetConfig>() == 181);
 const _: () = assert!(core::mem::offset_of!(Vault, management_fee_bps) == 106);
 const _: () = assert!(core::mem::offset_of!(Vault, performance_fee_bps) == 2_159);
@@ -1074,6 +1213,18 @@ mod tests {
     }
 
     #[test]
+    fn aum_cap_zero_is_unlimited_and_bound_is_inclusive() {
+        let mut v = vault(BASE);
+        assert_eq!(v.require_aum_headroom(u64::MAX), Ok(()));
+        v.max_aum = U64::from(BASE);
+        assert_eq!(v.require_aum_headroom(BASE), Ok(()));
+        assert_eq!(
+            v.require_aum_headroom(BASE + 1),
+            Err(VaultError::AumCapExceeded)
+        );
+    }
+
+    #[test]
     fn crystallization_does_not_create_a_phantom_drawdown() {
         const SUPPLY: u64 = BASE;
         let mut v = vault(BASE);
@@ -1159,6 +1310,7 @@ mod tests {
                 v.accrue_fees(supply, now);
                 let prior_hwm = u128::from(v.hwm_nav);
                 let fees = v.raw_fee_liability(supply, now);
+                let pre_nav = crate::nav::nav_per_share(supply + pending, aum - fees).unwrap();
                 let shares = shares_for_deposit(
                     BASE,
                     v.eff_supply(supply),
@@ -1166,12 +1318,12 @@ mod tests {
                 )
                 .unwrap();
 
-                v.aum = U64::from(aum + BASE);
                 let post_supply = supply + shares;
-                v.ratchet_hwm_after_mint(post_supply, now);
+                v.record_subscription(supply, shares, BASE, now);
                 let post_nav =
                     crate::nav::nav_per_share(post_supply + pending, aum + BASE - fees).unwrap();
-                assert_eq!(u128::from(v.hwm_nav), prior_hwm.max(post_nav));
+                assert!(post_nav > pre_nav);
+                assert_eq!(u128::from(v.hwm_nav) - post_nav, prior_hwm - pre_nav);
                 if aum == BASE / 2 {
                     assert!(post_nav < prior_hwm);
                 }
@@ -1510,6 +1662,65 @@ mod tests {
     }
 
     #[test]
+    fn exit_may_not_leave_fee_debt_above_the_remaining_cap() {
+        const SUPPLY: u64 = 10 * UNIT;
+        let mut v = vault(20 * UNIT);
+        v.perf_fee_accrued = U64::from(10 * UNIT);
+        // Debt exactly at the cap: nothing for the next fold to forgive.
+        assert_eq!(v.require_fee_debt_payable(SUPPLY, SUPPLY, 0), Ok(()));
+
+        // One unit less book and the fold would write the debt down.
+        v.aum = U64::from(20 * UNIT - 1);
+        assert_eq!(
+            v.require_fee_debt_payable(SUPPLY, SUPPLY, 0),
+            Err(VaultError::FeeDebtAboveCap),
+        );
+        let stored = v.raw_fee_liability(SUPPLY, 0);
+        v.accrue_fees(SUPPLY, 0);
+        assert!(v.raw_fee_liability(SUPPLY, 0) < stored);
+
+        // The gate reads the stored debt, so the same book is refused however
+        // few shares remain, including shares that only a queued redeem holds.
+        v.perf_fee_accrued = U64::from(10 * UNIT);
+        assert!(v.require_fee_debt_payable(SUPPLY, 1, 0).is_err());
+        v.pending_redeem_shares = U64::from(1u64);
+        assert!(v.require_fee_debt_payable(SUPPLY, 0, 0).is_err());
+
+        // The last exit leaves no share to collect a write-down.
+        v.pending_redeem_shares = U64::ZERO;
+        assert_eq!(v.require_fee_debt_payable(SUPPLY, 0, 0), Ok(()));
+    }
+
+    #[test]
+    fn fee_debt_gate_stands_only_while_fees_can_crystallize() {
+        const SUPPLY: u64 = 10 * UNIT;
+        const MINTABLE: u64 = (u64::MAX - crate::constants::VIRTUAL_SHARES as u64) / 2;
+        let mut v = vault(20 * UNIT - 1);
+        v.perf_fee_accrued = U64::from(10 * UNIT);
+        assert!(v.require_fee_debt_payable(SUPPLY, SUPPLY, 0).is_err());
+
+        // No share mint prices against the confidence sentinel.
+        v.aum_conf_bps = U16::from(u16::MAX);
+        assert_eq!(v.require_fee_debt_payable(SUPPLY, SUPPLY, 0), Ok(()));
+        v.aum_conf_bps = U16::from(u16::MAX - 1);
+        assert!(v.require_fee_debt_payable(SUPPLY, SUPPLY, 0).is_err());
+
+        // Debt at the cap is the most a crystallization mints, and it fits
+        // while the supply it starts from is at most half the range.
+        v.aum = U64::from(20 * UNIT);
+        let fee_net_aum = v.eff_aum(MINTABLE, 0);
+        let fee_shares = shares_for_deposit(10 * UNIT, MINTABLE, fee_net_aum).unwrap();
+        assert!(fee_shares > MINTABLE - MINTABLE / 1_000);
+        assert_eq!(v.require_mint_headroom(MINTABLE, fee_shares), Ok(()));
+        assert!(!v.fee_mint_blocked(MINTABLE));
+
+        // One share more and that mint can overflow: the exit passes instead.
+        v.aum = U64::from(20 * UNIT - 1);
+        assert!(v.require_fee_debt_payable(MINTABLE, SUPPLY, 0).is_err());
+        assert_eq!(v.require_fee_debt_payable(MINTABLE + 1, SUPPLY, 0), Ok(()));
+    }
+
+    #[test]
     fn share_quotes_apply_the_fee_cap_before_reconciliation() {
         const AUM: u64 = 30 * UNIT;
         const SUPPLY: u64 = 125 * UNIT / 10;
@@ -1760,6 +1971,40 @@ mod tests {
         assert!(v.charge_liquidation_slippage(1, half_hour).is_err());
     }
 
+    // GA-64: elapsed refill is earned at the AUM that held it, not the next one.
+    #[test]
+    fn set_aum_settles_slippage_refill_at_the_outgoing_aum() {
+        let half_hour = SWAP_SLIPPAGE_WINDOW_SECONDS / 2;
+        let swap = (1_000_000 * MAX_SWAP_SLIPPAGE_PER_WINDOW_BPS / 10_000) as u64;
+        let liq = (1_000_000 * MAX_LIQ_SLIPPAGE_PER_WINDOW_BPS / 10_000) as u64;
+        for next_aum in [2_000_000, 400_000] {
+            let mut v = vault(1_000_000);
+            v.charge_swap_slippage(swap, 0).unwrap();
+            v.charge_liquidation_slippage(liq, 0).unwrap();
+
+            v.set_aum(next_aum, half_hour);
+            assert_eq!(v.aum.get(), next_aum);
+            // Half a window at the old AUM repaid exactly half of each bucket,
+            // whichever way the AUM then moved.
+            v.charge_swap_slippage(0, half_hour).unwrap();
+            v.charge_liquidation_slippage(0, half_hour).unwrap();
+            assert_eq!(
+                (v.swap_slippage_spent.get(), v.liq_slippage_spent.get()),
+                (swap / 2, liq / 2)
+            );
+        }
+
+        // Re-validating an unchanged AUM every second must not floor a
+        // sub-unit refill rate (2,000 per hour here) down to nothing.
+        let mut v = vault(100_000);
+        v.charge_swap_slippage(2_000, 0).unwrap();
+        for now in 1..=half_hour {
+            v.set_aum(100_000, now);
+        }
+        v.charge_swap_slippage(0, half_hour).unwrap();
+        assert_eq!(v.swap_slippage_spent.get(), 1_000);
+    }
+
     // M-04: retained debt must still decay after a lasting AUM shrink.
     #[test]
     fn slippage_bucket_repays_excess_debt_before_allowing_new_losses() {
@@ -1923,6 +2168,31 @@ mod tests {
         assert!(v.require_instant_mark_fee_safe().is_ok());
     }
 
+    // GA-65: a waived fee absorbs nothing, so any mark capacity fails closed.
+    #[test]
+    fn fee_free_exit_requires_zero_mark_capacity() {
+        let mut v: Vault = unsafe { core::mem::zeroed() };
+        v.instant_redeem_fee_bps = U16::from(1_000u16);
+        // A spot-only book has no opaque mark to absorb.
+        assert!(v.require_instant_marks_within(0).is_ok());
+
+        v.positions[0].flags = POSITION_FLAG_ENABLED | POSITION_FLAG_REQUIRED_IN_AUM;
+        v.positions[0].max_drift_bps = U16::from(1u16);
+        assert!(v.require_instant_mark_fee_safe().is_ok());
+        assert_eq!(
+            v.require_instant_marks_within(0),
+            Err(VaultError::InstantRedeemDisabled.into()),
+        );
+
+        v.positions[0].flags = 0;
+        v.sinks[0].mint = Address::new_from_array([1; 32]);
+        assert!(v.require_instant_mark_fee_safe().is_ok());
+        assert_eq!(
+            v.require_instant_marks_within(0),
+            Err(VaultError::InstantRedeemDisabled.into()),
+        );
+    }
+
     #[test]
     fn instant_mark_fee_gate_keeps_the_bootstrap_budget_after_first_mark() {
         let mut v: Vault = unsafe { core::mem::zeroed() };
@@ -1943,6 +2213,34 @@ mod tests {
         v.instant_redeem_fee_bps = U16::from(10_000u16);
         assert_eq!(
             v.require_instant_mark_fee_safe(),
+            Err(VaultError::InstantRedeemDisabled.into()),
+        );
+    }
+
+    // GA-67: a sink mark is charged at its current share of the book.
+    #[test]
+    fn sink_value_must_fit_under_the_instant_fee() {
+        let mut v: Vault = unsafe { core::mem::zeroed() };
+        v.instant_redeem_fee_bps = U16::from(200u16);
+        // No sink value: nothing to cover, whatever the book.
+        assert!(v.require_sink_value_fee_covered(0).is_ok());
+
+        // Marked at the 2% cap of a 10M book: exactly covered.
+        v.sinks[0].value = U64::from(200_000u64);
+        assert!(v.require_sink_value_fee_covered(10_000_000).is_ok());
+        // An unrelated loss shrinks the book; the mark does not follow.
+        assert_eq!(
+            v.require_sink_value_fee_covered(9_999_999),
+            Err(VaultError::InstantRedeemDisabled.into()),
+        );
+
+        // The haircut `validate_aum` takes is not redeemable value, and the
+        // sinks are summed.
+        v.sink_haircut_bps = U16::from(5_000u16);
+        v.sinks[1].value = U64::from(200_000u64);
+        assert!(v.require_sink_value_fee_covered(10_000_000).is_ok());
+        assert_eq!(
+            v.require_sink_value_fee_covered(9_999_999),
             Err(VaultError::InstantRedeemDisabled.into()),
         );
     }

@@ -14,8 +14,8 @@ use {
     base64::{Engine, engine::general_purpose::STANDARD as B64},
     clap::{Parser, Subcommand},
     earn_vaults_cli::{
-        TOKEN_2022, addr, create_ata, create_ata_ix, fetch_snapshot, load_kp, mint_token_program,
-        rpc, send_opts, set_fees,
+        TOKEN_2022, addr, create_ata, create_ata_ix, fetch_snapshot, fetch_vault_data, load_kp,
+        mint_token_program, rpc, send_opts, set_fees,
     },
     earn_vaults_sdk::{
         ID as PROGRAM_ID,
@@ -36,7 +36,7 @@ use {
         },
         state::{
             Account as StateAccount, CcipLane, CollateralTerms, GENERAL_COLLATERAL, LoanLimits,
-            NestRoute, Protocol, Vault,
+            NestRoute, Protocol, SvmCcipLane, Vault,
         },
         zeropod::{U16, U32},
     },
@@ -184,6 +184,10 @@ enum Cmd {
         /// Vault-retained fee on settled queued shares in bps (0..=1000; zero disables).
         #[arg(long)]
         queued_redeem_fee_bps: Option<u16>,
+        /// Vault-wide cap on post-deposit AUM, in numéraire micro-units
+        /// (omit or 0 = no cap).
+        #[arg(long, value_name = "MICRO_NUMERAIRE")]
+        max_aum: Option<u64>,
     },
     /// Grant a delegate a permission bitmask over one target program. Defaults
     /// to the Jupiter-swap bit. For vault-internal (system) permissions —
@@ -450,6 +454,10 @@ enum Cmd {
         /// in numéraire micro-units. 0 disables the path.
         #[arg(long, value_name = "MICRO_NUMERAIRE")]
         max_flash_liability: Option<u64>,
+        /// Vault-wide cap on post-deposit AUM, in numéraire micro-units.
+        /// 0 removes the cap (unlike --max-deposit, where 0 blocks deposits).
+        #[arg(long, value_name = "MICRO_NUMERAIRE")]
+        max_aum: Option<u64>,
         /// Discount validate_aum applies to every sink mark, in bps.
         #[arg(long, value_name = "BPS")]
         sink_haircut_bps: Option<u16>,
@@ -479,7 +487,8 @@ enum Cmd {
         sink_release: Option<u8>,
         /// CCIP lane a SEND delegate may bridge to: CHAIN_SELECTOR:RECEIVER,
         /// RECEIVER a 0x-hex EVM address (left-padded to 32 bytes) or a base58
-        /// 32-byte key. `disabled` turns bridging off. One lane per vault.
+        /// 32-byte key. For SVM use CHAIN_SELECTOR:RECEIVER:TOKEN_OWNER
+        /// with base58 keys. `disabled` turns bridging off. One lane per vault.
         #[arg(long, value_name = "SPEC")]
         ccip_lane: Option<String>,
         /// Nest route: COMPOSER:RELAYER:OFT_STORE:SHARE_MINT. The first two are
@@ -954,13 +963,36 @@ fn parse_offerbook_limits(spec: &str) -> Result<LoanLimits> {
     Ok(limits)
 }
 
-fn parse_ccip_lane(spec: &str) -> Result<CcipLane> {
+fn parse_ccip_lane(spec: &str, curator: Address, vault: Address) -> Result<SetProtocolPolicy> {
     if spec == "disabled" {
-        return Ok(CcipLane::zero());
+        return Ok(SetProtocolPolicy::protocol_wide::<CcipLane>(
+            curator,
+            vault,
+            Protocol::Ccip,
+            None,
+        ));
     }
     let (selector, receiver) = spec
         .split_once(':')
-        .ok_or_else(|| anyhow!("want CHAIN_SELECTOR:RECEIVER or disabled"))?;
+        .ok_or_else(|| anyhow!("want CHAIN_SELECTOR:RECEIVER[:TOKEN_OWNER] or disabled"))?;
+    let selector = selector.parse::<u64>().context("chain selector")?.into();
+    if let Some((receiver, owner)) = receiver.split_once(':') {
+        let svm = SvmCcipLane {
+            lane: CcipLane {
+                dest_chain_selector: selector,
+                receiver: addr(receiver)?,
+            },
+            token_receiver: addr(owner)?,
+        };
+        svm.validate()
+            .map_err(|_| anyhow!("SVM lane needs a nonzero selector and token owner"))?;
+        return Ok(SetProtocolPolicy::protocol_wide(
+            curator,
+            vault,
+            Protocol::Ccip,
+            Some(svm),
+        ));
+    }
     let receiver = match receiver.strip_prefix("0x") {
         Some(hex) => {
             let bytes = (0..hex.len())
@@ -978,12 +1010,17 @@ fn parse_ccip_lane(spec: &str) -> Result<CcipLane> {
         None => addr(receiver)?,
     };
     let lane = CcipLane {
-        dest_chain_selector: selector.parse::<u64>().context("chain selector")?.into(),
+        dest_chain_selector: selector,
         receiver,
     };
     lane.validate()
         .map_err(|_| anyhow!("invalid CCIP lane: a nonzero selector needs a nonzero receiver"))?;
-    Ok(lane)
+    Ok(SetProtocolPolicy::protocol_wide(
+        curator,
+        vault,
+        Protocol::Ccip,
+        lane.enabled().then_some(lane),
+    ))
 }
 
 fn parse_nest_route(spec: &str) -> Result<(NestRoute, Address, Address)> {
@@ -1030,15 +1067,7 @@ fn load_state(path: &PathBuf) -> Result<State> {
 }
 
 fn vault_asset_mints(url: &str, vault: &Address) -> Result<Vec<Option<Address>>> {
-    let response = rpc(
-        url,
-        "getAccountInfo",
-        json!([vault.to_string(), {"encoding": "base64", "commitment": "confirmed"}]),
-    )?;
-    let encoded = response["value"]["data"][0]
-        .as_str()
-        .ok_or_else(|| anyhow!("vault {vault} not found"))?;
-    let data = B64.decode(encoded)?;
+    let data = fetch_vault_data(url, vault)?;
     let vault =
         <Vault as StateAccount>::read(&data).map_err(|error| anyhow!("decode vault: {error:?}"))?;
     Ok(vault
@@ -1131,12 +1160,7 @@ fn wait_fresh_oracles(url: &str, oracles: &[Address]) -> Result<()> {
     bail!("oracles did not advance within 960s — check the feed publisher")
 }
 
-/// `RefreshPrices` + `ValidateAum` for the state file's rows — `validate_aum`
-/// takes no price accounts of its own, so a caller carrying its own freshness
-/// bundles the refresh ahead of it in the same transaction. Pyth and OCR2
-/// accounts are supported; Data Streams needs a DON report this CLI cannot fetch.
-fn validate_ixs(st: &State, url: &str, user: Address) -> Result<Vec<Instruction>> {
-    let vault = addr(&st.vault)?;
+fn validate_aum_ix(st: &State, url: &str) -> Result<Instruction> {
     let mut custody_token_accounts = vec![st.vault_base_ata(url)?];
     if !st.vault_other.is_empty() {
         custody_token_accounts.push(addr(&st.vault_other)?);
@@ -1144,23 +1168,48 @@ fn validate_ixs(st: &State, url: &str, user: Address) -> Result<Vec<Instruction>
     for asset in st.ordered_additional_assets() {
         custody_token_accounts.push(addr(&asset.custody)?);
     }
+    Ok(ValidateAum {
+        vault: addr(&st.vault)?,
+        share_mint: addr(&st.share_mint)?,
+        custody_token_accounts,
+    }
+    .into_instruction())
+}
+
+/// `RefreshPrices` + `ValidateAum` for the state file's rows. The refresh
+/// carries Pyth and OCR2 accounts. Data Streams requires a DON report.
+fn validate_ixs(st: &State, url: &str, user: Address) -> Result<Vec<Instruction>> {
+    let validate = validate_aum_ix(st, url)?;
     let price_updates = st.oracles()?;
     Ok(vec![
         RefreshPrices {
-            vault,
+            vault: addr(&st.vault)?,
             user,
             price_updates,
             chainlink: None,
         }
         .into_instruction()
         .map_err(|e| anyhow!("{e}"))?,
-        ValidateAum {
-            vault,
-            share_mint: addr(&st.share_mint)?,
-            custody_token_accounts,
-        }
-        .into_instruction(),
+        validate,
     ])
+}
+
+/// Use the keeper's cached prices for direct share flows on vaults with
+/// required JupiterLend positions. A refresh could put the prices ahead of
+/// the keeper's marks and cause settlement to fail (GA-54).
+fn direct_validate_ixs(st: &State, url: &str, user: Address) -> Result<Vec<Instruction>> {
+    let data = fetch_vault_data(url, &addr(&st.vault)?)?;
+    let vault = <Vault as StateAccount>::read(&data).map_err(|e| anyhow!("decode vault: {e:?}"))?;
+    let keeper_marked = vault
+        .positions
+        .iter()
+        .any(|p| p.enabled() && p.required_in_aum() && p.protocol == Protocol::JupiterLend as u8);
+    if keeper_marked {
+        return Ok(vec![validate_aum_ix(st, url)?]);
+    }
+    let ixs = validate_ixs(st, url, user)?;
+    wait_fresh_oracles(url, &st.oracles()?)?;
+    Ok(ixs)
 }
 
 #[derive(Clone, Copy)]
@@ -1261,6 +1310,7 @@ fn run_init_vault(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
         performance_fee_bps,
         instant_redeem_fee_bps,
         queued_redeem_fee_bps,
+        max_aum,
     } = command
     else {
         unreachable!("dispatch passed the wrong command to run_init_vault")
@@ -1308,6 +1358,7 @@ fn run_init_vault(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
         // The sink and flash knobs all default off here; `update-vault`
         // sets them together once the vault exists.
         max_flash_liability: 0,
+        max_aum: max_aum.unwrap_or(0),
         sink_haircut_bps: 0,
         sink_max_staleness_seconds: None,
         sink_bootstrap_cap_bps: None,
@@ -1555,10 +1606,6 @@ fn run_subscribe(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
     let authority = addr(&st.authority)?;
     let base_token_program = mint_token_program(url, &base_mint)?;
     let token_2022 = addr(TOKEN_2022)?;
-    // Deposit share-math needs AUM fresh within the vault's configured window
-    // (60s). `validate_aum` is permissionless, so carry our own
-    // freshness in the same tx instead of racing the keeper's cycle.
-    let validate = validate_ixs(&st, url, user_pk)?;
     let ix = SubscribeDirect {
         user: user_pk,
         user_token_account: derive_associated_token_account(
@@ -1579,15 +1626,7 @@ fn run_subscribe(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
         min_shares_out,
     }
     .into_instruction();
-    // The program creates the vault base TA + user share TA if missing.
-    // subscribe's own deposit pricing re-gates the cached reading
-    // against the asset row's `max_staleness_seconds` (60s unless the
-    // curator widened it). The canonical pushers' updates are already
-    // 20-30s old when they land, so the state files point at the
-    // curator bot's self-posted accounts and we fire the moment its
-    // next tick posts (the bot must be live).
-    wait_fresh_oracles(url, &st.oracles()?)?;
-    let ixs: Vec<Instruction> = [validate, vec![ix]].concat();
+    let ixs = [direct_validate_ixs(&st, url, user_pk)?, vec![ix]].concat();
     println!(
         "subscribed {amount} ({})",
         send_opts(url, &ixs, &[&user_kp], &[], true)?
@@ -1635,8 +1674,7 @@ fn run_redeem_direct(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
         min_out,
     }
     .into_instruction();
-    wait_fresh_oracles(url, &st.oracles()?)?;
-    let ixs = [validate_ixs(&st, url, user_pk)?, vec![ix]].concat();
+    let ixs = [direct_validate_ixs(&st, url, user_pk)?, vec![ix]].concat();
     println!(
         "redeemed {shares} shares instantly ({})",
         send_opts(url, &ixs, &[&user_kp], &[], true)?
@@ -1726,6 +1764,7 @@ fn run_update_vault(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
         position_index,
         position_reset,
         max_flash_liability,
+        max_aum,
         sink_haircut_bps,
         sink_max_staleness,
         max_aum_staleness,
@@ -1831,12 +1870,7 @@ fn run_update_vault(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
         );
     }
     if let Some(spec) = ccip_lane.as_deref() {
-        let lane = parse_ccip_lane(spec)?;
-        let lane = lane.enabled().then_some(lane);
-        ixs.push(
-            SetProtocolPolicy::protocol_wide(curator_key, vault_key, Protocol::Ccip, lane)
-                .into_instruction(),
-        );
+        ixs.push(parse_ccip_lane(spec, curator_key, vault_key)?.into_instruction());
     }
     if let Some(spec) = nest_route.as_deref() {
         let (route, oft_store, share_mint) = parse_nest_route(spec)?;
@@ -1865,6 +1899,7 @@ fn run_update_vault(ctx: CommandContext<'_>, command: Cmd) -> Result<()> {
         remove_position: remove_position_index,
         retire_debt,
         max_flash_liability,
+        max_aum,
         sink_haircut_bps,
         sink_max_staleness_seconds: sink_max_staleness,
         max_aum_staleness_seconds: max_aum_staleness,
@@ -2399,6 +2434,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn ccip_lane_parser_encodes_svm_token_owner_and_preserves_evm_lanes() {
+        let curator = Address::new_from_array([1; 32]);
+        let vault = Address::new_from_array([2; 32]);
+        let receiver = Address::default();
+        let token_owner = Address::new_from_array([3; 32]);
+
+        let svm = parse_ccip_lane(&format!("42:{receiver}:{token_owner}"), curator, vault).unwrap();
+        assert_eq!(svm.payload.len(), 72);
+        assert_eq!(&svm.payload[..8], &42u64.to_le_bytes());
+        assert_eq!(&svm.payload[8..40], receiver.as_array());
+        assert_eq!(&svm.payload[40..], token_owner.as_array());
+        assert!(parse_ccip_lane(&format!("42:{receiver}:{receiver}"), curator, vault).is_err());
+
+        let evm = parse_ccip_lane("42:0x1234", curator, vault).unwrap();
+        assert_eq!(evm.payload.len(), 40);
+        assert_eq!(&evm.payload[8..38], &[0; 30]);
+        assert_eq!(&evm.payload[38..], &[0x12, 0x34]);
+        assert!(
+            parse_ccip_lane("disabled", curator, vault)
+                .unwrap()
+                .payload
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn export_pause_uses_upgrade_authority_without_signing() {
         let authority = Address::new_from_array([7; 32]);
         let vault = Address::new_from_array([8; 32]);
@@ -2867,11 +2928,13 @@ mod tests {
             performance_fee_bps,
             instant_redeem_fee_bps,
             queued_redeem_fee_bps,
+            max_aum,
             ..
         } = cli.cmd
         else {
             panic!("parsed the wrong command")
         };
+        assert!(max_aum.is_none());
         assert_eq!(curator, PathBuf::from("curator.json"));
         assert_eq!(base_mint, DEFAULT_BASE_MINT);
         assert_eq!(base_oracle, DEFAULT_BASE_ORACLE);
@@ -3114,6 +3177,8 @@ mod tests {
             "50",
             "--queued-redeem-fee-bps",
             "75",
+            "--max-aum",
+            "250000000000",
             "--retire-debt",
             "0",
         ])
@@ -3133,12 +3198,14 @@ mod tests {
             performance_fee_bps,
             instant_redeem_fee_bps,
             queued_redeem_fee_bps,
+            max_aum,
             retire_debt,
             ..
         } = cli.cmd
         else {
             panic!("parsed the wrong command")
         };
+        assert_eq!(max_aum, Some(250_000_000_000));
         assert_eq!(asset_index, Some(2));
         assert_eq!(max_deposit, Some(100));
         assert_eq!(asset_deployed, Some(0));

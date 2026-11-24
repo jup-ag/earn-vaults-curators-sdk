@@ -25,6 +25,9 @@ and emits an event. Claims and cancellations remain available. Only the vault
 curator can resume through `UpdateVault.paused`; share-transfer pauses remain
 curator-only.
 
+Flag `1` also blocks `CrystallizeFees`. A non-final redemption can still fail
+with `FeeDebtAboveCap` while crystallization is paused.
+
 Add an instruction for each vault to protect, simulate and review the proposal,
 then collect approvals. For emergency readiness, approve in advance and let
 the timelock elapse. Any member with Execute permission can execute a ready

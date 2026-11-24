@@ -6,7 +6,7 @@
     "kind": "programNode",
     "name": "earnVaults",
     "publicKey": "JUPVau1tSdENvv7KCwFY6Geer1a442q9mAfmaRXm83g",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "accounts": [
       {
         "kind": "accountNode",
@@ -713,6 +713,47 @@
             },
             {
               "kind": "structFieldTypeNode",
+              "name": "pricesChangedAt",
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "i64",
+                "endian": "le"
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "composedPrecision",
+              "type": {
+                "kind": "arrayTypeNode",
+                "item": {
+                  "kind": "arrayTypeNode",
+                  "item": {
+                    "kind": "numberTypeNode",
+                    "format": "u32",
+                    "endian": "le"
+                  },
+                  "count": {
+                    "kind": "fixedCountNode",
+                    "value": 2
+                  }
+                },
+                "count": {
+                  "kind": "fixedCountNode",
+                  "value": 8
+                }
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "maxAum",
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "u64",
+                "endian": "le"
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
               "name": "reserved",
               "type": {
                 "kind": "arrayTypeNode",
@@ -723,7 +764,7 @@
                 },
                 "count": {
                   "kind": "fixedCountNode",
-                  "value": 128
+                  "value": 48
                 }
               }
             }
@@ -3783,6 +3824,15 @@
                 "format": "u16",
                 "endian": "le"
               }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "maxAum",
+              "type": {
+                "kind": "numberTypeNode",
+                "format": "u64",
+                "endian": "le"
+              }
             }
           ]
         }
@@ -4795,6 +4845,24 @@
                   "endian": "le"
                 }
               }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "maxAum",
+              "type": {
+                "kind": "optionTypeNode",
+                "fixed": true,
+                "item": {
+                  "kind": "numberTypeNode",
+                  "format": "u64",
+                  "endian": "le"
+                },
+                "prefix": {
+                  "kind": "numberTypeNode",
+                  "format": "u8",
+                  "endian": "le"
+                }
+              }
             }
           ]
         }
@@ -5009,6 +5077,30 @@
             {
               "kind": "structFieldTypeNode",
               "name": "receiver",
+              "type": {
+                "kind": "publicKeyTypeNode"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "kind": "definedTypeNode",
+        "name": "svmCcipLane",
+        "type": {
+          "kind": "structTypeNode",
+          "fields": [
+            {
+              "kind": "structFieldTypeNode",
+              "name": "lane",
+              "type": {
+                "kind": "definedTypeLinkNode",
+                "name": "ccipLane"
+              }
+            },
+            {
+              "kind": "structFieldTypeNode",
+              "name": "tokenReceiver",
               "type": {
                 "kind": "publicKeyTypeNode"
               }
@@ -6714,6 +6806,18 @@
         "kind": "errorNode",
         "name": "entryPremiumExceeded",
         "code": 248,
+        "message": ""
+      },
+      {
+        "kind": "errorNode",
+        "name": "aumCapExceeded",
+        "code": 249,
+        "message": ""
+      },
+      {
+        "kind": "errorNode",
+        "name": "feeDebtAboveCap",
+        "code": 250,
         "message": ""
       }
     ]

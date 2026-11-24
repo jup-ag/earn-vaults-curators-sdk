@@ -65,6 +65,11 @@ pub enum VaultError {
     PolicyMismatch,
     /// The deposit's pricing reserve would lift the share price past the entry-premium limit.
     EntryPremiumExceeded,
+    /// The deposit would leave vault AUM above `Vault.max_aum`.
+    AumCapExceeded,
+    /// A non-final exit would leave uncrystallized fees above half of the
+    /// remaining AUM, where the next accrual would forgive them.
+    FeeDebtAboveCap,
 }
 
 impl From<VaultError> for ProgramError {
@@ -212,6 +217,13 @@ impl ToStr for VaultError {
             }
             Self::EntryPremiumExceeded => {
                 "Deposit pricing reserve would lift the share price past the entry-premium limit"
+            }
+            Self::AumCapExceeded => {
+                "Deposit would leave vault AUM above Vault.max_aum (0 = no cap)"
+            }
+            Self::FeeDebtAboveCap => {
+                "Exit would leave uncrystallized fees above half of the remaining AUM — run \
+                 crystallize_fees first, or redeem every remaining share"
             }
         }
     }

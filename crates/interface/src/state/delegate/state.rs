@@ -81,6 +81,8 @@ pub enum Settlement {
     /// which recorded deployment was returned. AUM folds independently below.
     Deployed {
         ta_index: usize,
+        /// Canonical escrow ATA pinned by the adapter, when its spendable delta prices the position.
+        escrow_index: Option<usize>,
         /// Mint account already present in the authenticated protocol CPI
         /// layout. The dispatcher binds its address to the custody token
         /// account's recorded mint before using it for extension checks.
