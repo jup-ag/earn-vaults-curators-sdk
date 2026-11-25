@@ -23,11 +23,15 @@ pub struct SlotState {
     pub last_priced_at: i64,
     /// Seconds a mark stays valid for `ValidateAum`.
     pub max_staleness_seconds: i64,
+    /// The vault has never held anything: no shares, no AUM, no marks.
+    /// See [`vault_in_bootstrap`].
+    pub vault_bootstrap: bool,
 }
 
 impl SlotState {
-    pub fn of(index: u8, position: &PositionConfig) -> Self {
+    pub fn of(index: u8, position: &PositionConfig, vault_bootstrap: bool) -> Self {
         Self {
+            vault_bootstrap,
             index,
             protocol: position.protocol,
             initialized: position.initialized(),
@@ -43,12 +47,16 @@ impl SlotState {
 
     /// Whether posting `value` now is allowed to be built.
     ///
-    /// A zero first mark is never posted (D34): it would initialize the slot at
-    /// zero, and the drift guard can only walk a zero mark to zero, so the slot
-    /// could never be marked up. An empty, never-marked slot is skipped by
-    /// `ValidateAum`, so leaving it unmarked is correct.
+    /// On a vault still in bootstrap, a zero first mark is never posted (D34):
+    /// it would end the bootstrap, after which a deposit needs nonzero AUM, so
+    /// the first deposit could never land. Leaving the slot unmarked is correct
+    /// there: `ValidateAum` skips a never-marked slot.
+    ///
+    /// Once the vault holds anything, a never-marked slot blocks deposits
+    /// (`PricedSlotMissing`) until marked, and the program takes a zero first
+    /// mark as attesting an empty slot, so zero is posted.
     pub fn decide(&self, value: u64) -> MarkDecision {
-        if value == 0 && !self.initialized {
+        if value == 0 && !self.initialized && self.vault_bootstrap {
             MarkDecision::SkipEmptyBootstrap
         } else {
             MarkDecision::Post {
@@ -64,8 +72,26 @@ pub enum MarkDecision {
     /// Post `value`. A `bootstrap` mark needs a fresh `ValidateAum` before it,
     /// which [`crate::jobs::attest`] places.
     Post { value: u64, bootstrap: bool },
-    /// The slot was never marked and is worth zero: post nothing.
+    /// The vault is in bootstrap and the slot is worth zero: post nothing.
     SkipEmptyBootstrap,
+}
+
+/// The program's bootstrap test: no shares, nothing queued, zero AUM, and no
+/// mark, deployment or sink ever recorded. The first deposit prices at 1:1
+/// only in this state.
+pub fn vault_in_bootstrap(vault: &Vault, share_supply: u64) -> bool {
+    share_supply == 0
+        && vault.aum.get() == 0
+        && vault.pending_redeem_shares.get() == 0
+        && vault
+            .positions
+            .iter()
+            .all(|p| !p.initialized() && p.last_value.get() == 0)
+        && vault.assets.iter().all(|a| a.deployed.get() == 0)
+        && vault
+            .sinks
+            .iter()
+            .all(|s| s.is_free() && s.value.get() == 0)
 }
 
 /// Why a slot needs a mark before `ValidateAum` or a share flow can pass.
@@ -80,20 +106,32 @@ pub enum Due {
     /// `refreshing`, every priced JupiterLend slot is due, since the refresh
     /// in the same transaction advances the cache.
     BeforePriceChange,
+    /// Never marked, on a vault past bootstrap: deposits are refused
+    /// (`PricedSlotMissing`) until a first mark, zero if the slot is empty.
+    NeverMarked,
 }
 
 /// Every enabled, AUM-counted slot that needs a mark at `now`.
-pub fn due_slots(vault: &Vault, now: i64, refreshing: bool) -> Vec<(SlotState, Due)> {
+/// `share_supply` is the share mint's supply.
+pub fn due_slots(
+    vault: &Vault,
+    share_supply: u64,
+    now: i64,
+    refreshing: bool,
+) -> Vec<(SlotState, Due)> {
     let changed_at = vault.prices_changed_at.get();
+    let bootstrap = vault_in_bootstrap(vault, share_supply);
     vault
         .positions
         .iter()
         .enumerate()
         .filter(|(_, p)| p.enabled() && p.required_in_aum())
         .filter_map(|(i, p)| {
-            let slot = SlotState::of(i as u8, p);
+            let slot = SlotState::of(i as u8, p, bootstrap);
             let due = if slot.initialized && !slot.priced {
                 Due::Unpriced
+            } else if !slot.initialized && !p.debt() && !bootstrap {
+                Due::NeverMarked
             } else if slot.priced
                 && now.saturating_sub(slot.last_priced_at) > slot.max_staleness_seconds
             {
@@ -145,8 +183,9 @@ mod tests {
         },
     };
 
-    fn slot(initialized: bool) -> SlotState {
+    fn slot(initialized: bool, vault_bootstrap: bool) -> SlotState {
         SlotState {
+            vault_bootstrap,
             index: 0,
             protocol: Protocol::Offerbook as u8,
             initialized,
@@ -159,9 +198,21 @@ mod tests {
 
     #[test]
     fn an_empty_vault_never_gets_a_first_zero_mark() {
-        assert_eq!(slot(false).decide(0), MarkDecision::SkipEmptyBootstrap);
         assert_eq!(
-            slot(false).decide(1),
+            slot(false, true).decide(0),
+            MarkDecision::SkipEmptyBootstrap
+        );
+        // Past bootstrap a zero first mark attests the slot is empty, which
+        // deposits wait for.
+        assert_eq!(
+            slot(false, false).decide(0),
+            MarkDecision::Post {
+                value: 0,
+                bootstrap: true
+            }
+        );
+        assert_eq!(
+            slot(false, true).decide(1),
             MarkDecision::Post {
                 value: 1,
                 bootstrap: true
@@ -169,7 +220,7 @@ mod tests {
         );
         // Once marked, zero is a real value that must be attested.
         assert_eq!(
-            slot(true).decide(0),
+            slot(true, false).decide(0),
             MarkDecision::Post {
                 value: 0,
                 bootstrap: false
@@ -200,28 +251,41 @@ mod tests {
         }
         vault.prices_changed_at = I64::from(995);
         let due = |vault: &Vault, refreshing| {
-            due_slots(vault, 1_000, refreshing)
+            due_slots(vault, 0, 1_000, refreshing)
                 .into_iter()
                 .map(|(s, d)| (s.index, d))
                 .collect::<Vec<_>>()
         };
+        let never = (4, Due::NeverMarked);
         assert_eq!(
             due(vault, false),
             vec![
                 (1, Due::Stale),
                 (2, Due::BeforePriceChange),
-                (3, Due::Unpriced)
+                (3, Due::Unpriced),
+                never,
             ]
         );
         vault.prices_changed_at = I64::from(0);
-        assert_eq!(due(vault, false), vec![(1, Due::Stale), (3, Due::Unpriced)]);
+        assert_eq!(
+            due(vault, false),
+            vec![(1, Due::Stale), (3, Due::Unpriced), never]
+        );
         assert_eq!(
             due(vault, true),
             vec![
                 (1, Due::Stale),
                 (2, Due::BeforePriceChange),
-                (3, Due::Unpriced)
+                (3, Due::Unpriced),
+                never,
             ]
         );
+        // A vault in bootstrap has nothing due: no slot was ever marked.
+        for p in &mut vault.positions {
+            p.flags &= !(POSITION_FLAG_INITIALIZED | POSITION_FLAG_PRICED);
+        }
+        assert!(vault_in_bootstrap(vault, 0));
+        assert_eq!(due(vault, false), vec![]);
+        assert!(!vault_in_bootstrap(vault, 1));
     }
 }

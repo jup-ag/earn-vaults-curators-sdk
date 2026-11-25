@@ -14,12 +14,12 @@
 use {
     crate::{
         Error, Result,
-        mark::{SlotState, find_slot},
+        mark::{SlotState, find_slot, vault_in_bootstrap},
         price::{RowPrice, Side, gate},
-        snapshot::{CLOCK_SYSVAR_ID, Snapshot, mint, owned_by, token_balance},
+        snapshot::{CLOCK_SYSVAR_ID, Snapshot, mint, owned_by, token_account, token_balance},
     },
     earn_vaults_sdk::{
-        pda::{derive_associated_token_account, derive_vault_authority},
+        pda::{derive_associated_token_account, derive_share_mint, derive_vault_authority},
         state::{Protocol, Vault},
     },
     solana_address::Address,
@@ -92,7 +92,7 @@ impl Market {
         let Some(lending) = snapshot.get(&self.lending)? else {
             // No market, so no receipts can exist; a receipt account would be
             // an account we do not understand.
-            if snapshot.get(&receipt_account)?.is_some() {
+            if token_account(snapshot, &receipt_account)?.is_some() {
                 return Err(Error::Missing {
                     what: "Earn Lending",
                     address: self.lending,
@@ -261,7 +261,7 @@ impl EarnPlan {
 
     /// Every account [`Self::value`] reads, for one `getMultipleAccounts`.
     pub fn keys(&self) -> Vec<Address> {
-        let mut keys = vec![self.vault, CLOCK_SYSVAR_ID];
+        let mut keys = vec![self.vault, CLOCK_SYSVAR_ID, derive_share_mint(&self.vault)];
         for row in &self.rows {
             keys.push(row.market.mint);
             keys.extend(row.market.keys(&self.authority));
@@ -306,7 +306,7 @@ impl EarnPlan {
             });
         }
         Ok(EarnValuation {
-            slot: SlotState::of(slot, position),
+            slot: SlotState::of(slot, position, in_bootstrap(snapshot, &self.vault, vault)?),
             now,
             value,
             markets,
@@ -368,4 +368,18 @@ impl EarnValuation {
             .filter_map(|m| m.price.map(|p| p.valid_until))
             .min()
     }
+}
+
+/// Whether the vault is in bootstrap, reading the share mint's supply.
+pub(crate) fn in_bootstrap(snapshot: &Snapshot, key: &Address, vault: &Vault) -> Result<bool> {
+    let share_mint = derive_share_mint(key);
+    if vault.share_mint != share_mint {
+        return Err(Error::Layout {
+            what: "vault",
+            address: *key,
+            reason: "share mint is not the vault's PDA",
+        });
+    }
+    let supply = mint(snapshot, &share_mint, "share mint")?.supply;
+    Ok(vault_in_bootstrap(vault, supply))
 }

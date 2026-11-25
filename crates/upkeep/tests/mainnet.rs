@@ -65,9 +65,12 @@ impl Fixture {
     }
 
     fn offerbook(&self) -> OfferbookPlan {
+        // The fixture's counters equal the loan list's, so its one slot stands
+        // in for a read taken before the scans.
         OfferbookPlan::new(
             self.vault,
             &self.snapshot(),
+            self.slot,
             self.lent.clone(),
             self.borrowed.clone(),
         )
@@ -115,7 +118,7 @@ fn juplend_optimizer_earn_equals_the_optimizer_and_the_chain() {
     assert_eq!(earn.value, f.expect("earn", "onchain_mark"));
     assert_eq!(earn.markets.len(), 5);
     assert!(
-        OfferbookPlan::new(f.vault, &snapshot, [], []).is_err(),
+        OfferbookPlan::new(f.vault, &snapshot, f.slot, [], []).is_err(),
         "no Offerbook slot"
     );
 
@@ -206,6 +209,28 @@ fn re7_lending_values_extended_loans_by_their_current_period() {
         .value(&snapshot)
         .unwrap();
     assert_eq!(earn.value, f.expect("earn", "optimizer"));
+    // nOPAL has no Earn market. SOL sent to its would-be receipt address
+    // leaves an empty system account, which must not block the mark.
+    let plan = EarnPlan::new(f.vault, &snapshot, EarnScope::LenderOnly).unwrap();
+    let no_market = plan
+        .rows
+        .iter()
+        .find(|r| snapshot.get(&r.market.lending).unwrap().is_none())
+        .unwrap();
+    let receipt = no_market.market.receipt_account(&plan.authority);
+    let mut accounts = f.accounts.clone();
+    accounts.retain(|(k, _)| *k != receipt);
+    accounts.push((
+        receipt,
+        Some(Account {
+            owner: earn_vaults_upkeep::snapshot::SYSTEM_PROGRAM_ID,
+            data: vec![],
+        }),
+    ));
+    let griefed = plan
+        .value(&Snapshot::new(f.slot, accounts).unwrap())
+        .unwrap();
+    assert_eq!(griefed.value, earn.value);
     assert_eq!(
         earn.slot.decide(earn.value),
         MarkDecision::Post {

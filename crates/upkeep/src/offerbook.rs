@@ -29,14 +29,14 @@
 use {
     crate::{
         Error, Result,
-        earn::{PlannedRow, Receipts, check_rows, planned_rows},
+        earn::{PlannedRow, Receipts, check_rows, in_bootstrap, planned_rows},
         mark::{SlotState, find_slot},
         price::{RowPrice, Side, gate},
         snapshot::{CLOCK_SYSVAR_ID, Snapshot, owned_by, token_balance},
     },
     earn_vaults_sdk::{
         offerbook::{PROGRAM_ID, derive_config, derive_loan_vault, derive_user},
-        pda::{derive_associated_token_account, derive_vault_authority},
+        pda::{derive_associated_token_account, derive_share_mint, derive_vault_authority},
         state::{Protocol, Vault},
     },
     offerbook_client::state::{Asset, Config, Loan, LoanStatus, LoanType, User},
@@ -91,14 +91,25 @@ pub struct OfferbookPlan {
 }
 
 impl OfferbookPlan {
-    /// `snapshot` holds [`discovery_keys`], read no earlier than the
-    /// [`loan_filters`] scans that produced `lent` and `borrowed`.
+    /// `snapshot` holds [`discovery_keys`] and must be read **before** the
+    /// [`loan_filters`] scans that produced `lent` and `borrowed`;
+    /// `scans_slot` is the earliest context slot of those scans. Its `User`
+    /// counters are then no newer than the loan list, so a loan created
+    /// in between moves the counters and [`Self::value`] refuses until the
+    /// next discovery. Read after the scans, the counters would already count
+    /// a loan the list lacks, and the omission would never be seen.
     pub fn new(
         vault: Address,
         snapshot: &Snapshot,
+        scans_slot: u64,
         lent: impl IntoIterator<Item = Address>,
         borrowed: impl IntoIterator<Item = Address>,
     ) -> Result<Self> {
+        if snapshot.slot() > scans_slot {
+            return Err(Error::Job(
+                "read the discovery snapshot before the loan scans",
+            ));
+        }
         let state = snapshot.vault(&vault)?;
         let (slot, _) = offerbook_slot(state)?;
         let authority = derive_vault_authority(&vault);
@@ -132,7 +143,12 @@ impl OfferbookPlan {
 
     /// Every account [`Self::value`] reads, for one `getMultipleAccounts`.
     pub fn keys(&self) -> Vec<Address> {
-        let mut keys = vec![self.vault, CLOCK_SYSVAR_ID, self.user];
+        let mut keys = vec![
+            self.vault,
+            CLOCK_SYSVAR_ID,
+            derive_share_mint(&self.vault),
+            self.user,
+        ];
         for row in &self.rows {
             keys.push(row.market.mint);
             keys.push(self.escrow_account(row));
@@ -267,7 +283,7 @@ impl OfferbookPlan {
             .chain(expires_at)
             .min();
         Ok(OfferbookValuation {
-            slot: SlotState::of(slot, position),
+            slot: SlotState::of(slot, position, in_bootstrap(snapshot, &self.vault, vault)?),
             now,
             value,
             assets,
@@ -373,17 +389,17 @@ impl OfferbookPlan {
                     "Offerbook loan vault",
                 )
             })?;
-        if u128::from(held) != locked {
-            return Err(fail(
-                "loan vault balance differs from the locked collateral",
-            ));
+        // Anyone can send tokens to the loan vault: count only what the loan
+        // locks, and fail only when the vault holds less than that.
+        if u128::from(held) < locked {
+            return Err(fail("loan vault holds less than the locked collateral"));
         }
         Ok(vec![
             Component {
                 kind: Kind::PledgedCollateral,
                 mint: collateral.mint,
                 account: loan_vault,
-                amount: held,
+                amount: to_u64(locked)?,
                 side: Side::Asset,
             },
             Component {
@@ -541,6 +557,7 @@ mod tests {
         let mut data = vec![0u8; Vault::LEN];
         data[0] = Vault::DISCRIMINATOR;
         let v = Vault::read_mut(&mut data).unwrap();
+        v.share_mint = derive_share_mint(&VAULT);
         for (i, (mint, price)) in [(USDC, 100_000_000), (SOL, 10_000_000_000)]
             .into_iter()
             .enumerate()
@@ -554,6 +571,12 @@ mod tests {
             | POSITION_FLAG_INITIALIZED
             | POSITION_FLAG_PRICED;
         data
+    }
+
+    fn share_mint(supply: u64) -> Option<Account> {
+        let mut data = mint().unwrap().data;
+        data[36..44].copy_from_slice(&supply.to_le_bytes());
+        some(crate::snapshot::TOKEN_2022_PROGRAM_ID, data)
     }
 
     fn mint() -> Option<Account> {
@@ -690,6 +713,7 @@ mod tests {
         let mut accounts = vec![
             clock(1, NOW),
             (VAULT, some(earn_vaults_sdk::ID, vault())),
+            (derive_share_mint(&VAULT), share_mint(1_000)),
             (USDC, mint()),
             (SOL, mint()),
             (user_key, user(1, 1)),
@@ -720,7 +744,7 @@ mod tests {
 
     fn value(accounts: Vec<(Address, Option<Account>)>) -> Result<OfferbookValuation> {
         let snapshot = Snapshot::new(1, accounts)?;
-        OfferbookPlan::new(VAULT, &snapshot, [LENT], [BORROWED])?.value(&snapshot)
+        OfferbookPlan::new(VAULT, &snapshot, 1, [LENT], [BORROWED])?.value(&snapshot)
     }
 
     #[test]
@@ -776,6 +800,12 @@ mod tests {
         accounts.retain(|(k, _)| *k != vault_key);
         accounts.push((vault_key, token(&SOL, &BORROWED, 19_999_999)));
         assert!(matches!(value(accounts.clone()), Err(Error::Loan { .. })));
+        // A donation on top of the locked collateral counts for nothing and
+        // stops nothing.
+        accounts.retain(|(k, _)| *k != vault_key);
+        accounts.push((vault_key, token(&SOL, &BORROWED, 20_000_001)));
+        let v = value(accounts.clone()).unwrap();
+        assert_eq!(v.components[2].amount, 20_000_000);
         accounts.retain(|(k, _)| *k != vault_key);
         accounts.push((vault_key, None));
         assert!(matches!(value(accounts), Err(Error::Missing { .. })));
@@ -817,10 +847,22 @@ mod tests {
     }
 
     #[test]
+    fn discovery_read_after_the_loan_scans_is_refused() {
+        let snapshot = Snapshot::new(1, accounts(&loan(true), &loan(false))).unwrap();
+        // The scans ran at slot 0, before this slot-1 read: its counters could
+        // already count a loan the scans missed.
+        assert!(matches!(
+            OfferbookPlan::new(VAULT, &snapshot, 0, [LENT], [BORROWED]),
+            Err(Error::Job(_))
+        ));
+        assert!(OfferbookPlan::new(VAULT, &snapshot, 2, [LENT], [BORROWED]).is_ok());
+    }
+
+    #[test]
     fn a_loan_created_after_discovery_stops_the_mark() {
         let accounts = accounts(&loan(true), &loan(false));
         let snapshot = Snapshot::new(1, accounts.clone()).unwrap();
-        let plan = OfferbookPlan::new(VAULT, &snapshot, [LENT], [BORROWED]).unwrap();
+        let plan = OfferbookPlan::new(VAULT, &snapshot, 1, [LENT], [BORROWED]).unwrap();
         let user_key = plan.user;
         let mut later = accounts;
         later.retain(|(k, _)| *k != user_key);

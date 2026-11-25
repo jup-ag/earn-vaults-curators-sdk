@@ -17,7 +17,6 @@ use {
     crate::{Error, Result, earn::PlannedRow, mark::Mark, snapshot::Account},
     earn_vaults_sdk::{
         instructions::{CrystallizeFees, FulfillRedeem, PriceOpaque, ValidateAum},
-        nav::redeem_owed,
         pda::{derive_associated_token_account, derive_escrow, derive_share_mint},
         state::{
             Account as _, Escrow, FULFILLED_PARTIAL, FULFILLED_PENDING, Pause, REQUEST_TYPE_REDEEM,
@@ -249,57 +248,20 @@ pub fn crystallize(keys: &VaultKeys, prior: Vec<Instruction>, payer: Address) ->
     ixs
 }
 
-/// Whether filling all of `redeem` would trip the fee-debt gate (#290): fee
-/// debt above half the AUM left behind, while a crystallization could mint.
+/// Whether to put `CrystallizeFees` before a redeem fill (#290).
 ///
-/// Replays `ValidateAum`'s fee fold and the fill's AUM debit on a copy of the
-/// vault. shortcut: uses the stored AUM, not the one this transaction's
-/// `ValidateAum` will compute, and assumes the whole request fills; a partial
-/// fill debits less, so this errs towards crystallizing. Replace with the
-/// program's exact payout once the keeper simulates fills.
-pub fn crystallize_before_fill(
-    vault_data: &[u8],
-    share_supply: u64,
-    redeem: &QueuedRedeem,
-    now: i64,
-) -> Result<bool> {
-    let mut data = vault_data.to_vec();
-    let vault = Vault::read_mut(&mut data).map_err(|_| Error::Job("not a vault account"))?;
-    let eff_supply = vault.eff_supply(share_supply);
-    if redeem.shares == 0 || redeem.shares > vault.pending_redeem_shares.get() {
-        return Err(Error::Job("redeem shares are not pending on this vault"));
-    }
-    if eff_supply != 0 {
-        vault.accrue_capital_time(now);
-    }
-    vault.set_aum(vault.aum.get(), now);
-    vault.accrue_fees(share_supply, now);
-    let pricing_aum = vault.eff_aum(share_supply, now);
-    let fee_bps = if redeem.shares == eff_supply {
-        0
-    } else {
-        u128::from(vault.queued_redeem_fee_bps.get())
-    };
-    let net = redeem.shares - (u128::from(redeem.shares) * fee_bps / 10_000) as u64;
-    let owed = redeem_owed(
-        net,
-        share_supply,
-        vault.pending_redeem_shares.get(),
-        pricing_aum,
-    )
-    .map_err(|_| Error::Overflow("redeem payout"))?;
-    let book = u128::from(pricing_aum) * u128::from(net) / u128::from(eff_supply.max(1));
-    let owed = owed.min(u64::try_from(book).map_err(|_| Error::Overflow("redeem payout"))?);
-    vault.pending_redeem_shares = (vault.pending_redeem_shares.get() - redeem.shares).into();
-    let left = vault
-        .aum
-        .get()
-        .checked_sub(owed)
-        .ok_or(Error::Job("the fill would pay more than the vault's AUM"))?;
-    vault.set_aum(left, now);
-    Ok(vault
-        .require_fee_debt_payable(eff_supply, share_supply, now)
-        .is_err())
+/// The program refuses a fill that leaves fee debt above half the AUM left
+/// behind, while a crystallization could mint. Whether a fill trips that
+/// depends on the AUM this transaction's `ValidateAum` computes, which a
+/// builder cannot know, so crystallize whenever any fee is owed and a mint is
+/// possible. Crystallizing early changes no value: the fee is owed either way.
+/// `false` while subscriptions are paused, since `CrystallizeFees` is refused
+/// then; a fill that needs it fails on chain and waits for the unpause.
+pub fn crystallize_before_fill(vault_data: &[u8], share_supply: u64, now: i64) -> Result<bool> {
+    let vault = Vault::read(vault_data).map_err(|_| Error::Job("not a vault account"))?;
+    Ok(vault.paused & Pause::Subscribe as u8 == 0
+        && !vault.fee_mint_blocked(vault.eff_supply(share_supply))
+        && vault.raw_fee_liability(share_supply, now) > 0)
 }
 
 #[cfg(test)]
@@ -309,7 +271,7 @@ mod tests {
         crate::earn::{Market, PlannedRow},
         earn_vaults_sdk::{
             state::{ASSET_FLAG_DEPOSIT_ENABLED, ASSET_FLAG_PRICE_IN_AUM, REQUEST_TYPE_REDEEM},
-            zeropod::{I64, U64, U128},
+            zeropod::{I64, U16, U64, U128},
         },
     };
 
@@ -499,39 +461,27 @@ mod tests {
     }
 
     #[test]
-    fn crystallize_before_fill_follows_the_half_aum_fee_gate() {
+    fn crystallize_before_a_fill_whenever_fees_are_owed_and_can_mint() {
         let mut data = vault_bytes();
         let now = 1_000_000;
         {
             let v = Vault::read_mut(&mut data).unwrap();
             v.aum = U64::from(1_000_000_000u64);
             v.last_fee_accrual_at = I64::from(now);
-            v.last_priced_at = I64::from(now);
-            v.pending_redeem_shares = U64::from(900_000_000u64);
             v.hwm_nav = U128::from(u128::MAX / 4);
         }
-        let mut big = redeem();
-        big.shares = 900_000_000;
-        // No fee debt: never crystallize.
-        assert_eq!(
-            crystallize_before_fill(&data, 100_000_000, &big, now),
-            Ok(false)
-        );
-        // Debt of 100 against 1,000 of AUM: fine before, above half of the ~190 left after.
-        Vault::read_mut(&mut data).unwrap().perf_fee_accrued = U64::from(100_000_000u64);
-        assert_eq!(
-            crystallize_before_fill(&data, 100_000_000, &big, now),
-            Ok(true)
-        );
-        let mut small = redeem();
-        small.shares = 1_000;
-        assert_eq!(
-            crystallize_before_fill(&data, 100_000_000, &small, now),
-            Ok(false)
-        );
-        let mut absent = redeem();
-        absent.shares = 900_000_001;
-        assert!(crystallize_before_fill(&data, 100_000_000, &absent, now).is_err());
+        // No fee debt: nothing to crystallize.
+        assert_eq!(crystallize_before_fill(&data, 100_000_000, now), Ok(false));
+        // Any debt: crystallize, whatever AUM the fill will see.
+        Vault::read_mut(&mut data).unwrap().perf_fee_accrued = U64::from(1u64);
+        assert_eq!(crystallize_before_fill(&data, 100_000_000, now), Ok(true));
+        // Not while subscriptions are paused (CrystallizeFees would fail) or a
+        // mint is impossible (the program waives the gate).
+        Vault::read_mut(&mut data).unwrap().paused = Pause::Subscribe as u8;
+        assert_eq!(crystallize_before_fill(&data, 100_000_000, now), Ok(false));
+        Vault::read_mut(&mut data).unwrap().paused = 0;
+        Vault::read_mut(&mut data).unwrap().aum_conf_bps = U16::from(u16::MAX);
+        assert_eq!(crystallize_before_fill(&data, 100_000_000, now), Ok(false));
     }
 
     #[test]

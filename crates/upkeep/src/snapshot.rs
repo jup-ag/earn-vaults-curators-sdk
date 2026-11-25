@@ -15,6 +15,7 @@ pub const TOKEN_PROGRAM_ID: Address =
     Address::from_str_const("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 pub const TOKEN_2022_PROGRAM_ID: Address =
     Address::from_str_const("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
+pub const SYSTEM_PROGRAM_ID: Address = Address::from_str_const("11111111111111111111111111111111");
 
 /// One account as `getMultipleAccounts` returns it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -175,8 +176,21 @@ pub(crate) fn mint(snapshot: &Snapshot, key: &Address, what: &'static str) -> Re
     })
 }
 
+/// The account at a token-account address, `None` when no token account is
+/// there. Anyone can send SOL to an unused address, leaving an empty
+/// system-owned account; that holds no tokens either, and must not stop a
+/// valuation.
+pub(crate) fn token_account<'a>(
+    snapshot: &'a Snapshot,
+    key: &Address,
+) -> Result<Option<&'a Account>> {
+    Ok(snapshot
+        .get(key)?
+        .filter(|a| !(a.owner == SYSTEM_PROGRAM_ID && a.data.is_empty())))
+}
+
 /// The balance of a token account that must hold `mint` for `owner`.
-/// An account that does not exist holds nothing; any other mismatch fails.
+/// An address with no token account holds nothing; any other mismatch fails.
 pub(crate) fn token_balance(
     snapshot: &Snapshot,
     key: &Address,
@@ -184,7 +198,7 @@ pub(crate) fn token_balance(
     owner: &Address,
     what: &'static str,
 ) -> Result<u64> {
-    let Some(account) = snapshot.get(key)? else {
+    let Some(account) = token_account(snapshot, key)? else {
         return Ok(0);
     };
     token_program(account, key, what)?;
@@ -283,6 +297,19 @@ pub(crate) mod tests {
         let mut foreign = token(&mint, &owner, 7).unwrap();
         foreign.owner = owner;
         assert!(matches!(read(Some(foreign)), Err(Error::WrongOwner { .. })));
+        let sol_only = Account {
+            owner: SYSTEM_PROGRAM_ID,
+            data: vec![],
+        };
+        assert_eq!(read(Some(sol_only)), Ok(0), "SOL sent to the address");
+        let squatted = Account {
+            owner: SYSTEM_PROGRAM_ID,
+            data: vec![0; 165],
+        };
+        assert!(matches!(
+            read(Some(squatted)),
+            Err(Error::WrongOwner { .. })
+        ));
         let mut short = token(&mint, &owner, 7).unwrap();
         short.data.truncate(100);
         assert!(matches!(read(Some(short)), Err(Error::Layout { .. })));
