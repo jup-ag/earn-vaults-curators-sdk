@@ -144,12 +144,21 @@ fn u64_at(data: &[u8], at: usize) -> u64 {
     u64::from_le_bytes(data[at..at + 8].try_into().expect("8-byte field"))
 }
 
+/// An SPL `COption<Pubkey>`: a four-byte tag, then the key.
+fn option_key_at(data: &[u8], at: usize) -> Option<Address> {
+    (data[at..at + 4] != [0; 4])
+        .then(|| Address::new_from_array(data[at + 4..at + 36].try_into().expect("32-byte key")))
+}
+
 /// An SPL Token or Token-2022 mint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Mint {
     pub token_program: Address,
+    pub mint_authority: Option<Address>,
     pub supply: u64,
     pub decimals: u8,
+    /// A Token-2022 mint carrying extensions.
+    pub extended: bool,
 }
 
 pub(crate) fn mint(snapshot: &Snapshot, key: &Address, what: &'static str) -> Result<Mint> {
@@ -171,8 +180,54 @@ pub(crate) fn mint(snapshot: &Snapshot, key: &Address, what: &'static str) -> Re
     }
     Ok(Mint {
         token_program,
+        mint_authority: option_key_at(data, 0),
         supply: u64_at(data, 36),
         decimals: data[44],
+        extended: data.len() > 82,
+    })
+}
+
+/// An SPL Token or Token-2022 token account.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TokenAccount {
+    pub token_program: Address,
+    pub mint: Address,
+    pub owner: Address,
+    pub amount: u64,
+    pub delegate: Option<Address>,
+    /// `AccountState`: 1 initialized, 2 frozen.
+    pub state: u8,
+    /// A Token-2022 account carrying extensions.
+    pub extended: bool,
+}
+
+/// Parse `account` as a token account.
+pub(crate) fn parse_token_account(
+    account: &Account,
+    key: &Address,
+    what: &'static str,
+) -> Result<TokenAccount> {
+    let token_program = token_program(account, key, what)?;
+    let bad = |reason| Error::Layout {
+        what,
+        address: *key,
+        reason,
+    };
+    let data = &account.data;
+    if data.len() < 165 || (data.len() > 165 && data.get(165) != Some(&2)) {
+        return Err(bad("not a token account"));
+    }
+    if data[108] == 0 {
+        return Err(bad("token account is not initialized"));
+    }
+    Ok(TokenAccount {
+        token_program,
+        mint: Address::new_from_array(data[..32].try_into().expect("32-byte key")),
+        owner: Address::new_from_array(data[32..64].try_into().expect("32-byte key")),
+        amount: u64_at(data, 64),
+        delegate: option_key_at(data, 72),
+        state: data[108],
+        extended: data.len() > 165,
     })
 }
 
@@ -201,26 +256,19 @@ pub(crate) fn token_balance(
     let Some(account) = token_account(snapshot, key)? else {
         return Ok(0);
     };
-    token_program(account, key, what)?;
+    let parsed = parse_token_account(account, key, what)?;
     let bad = |reason| Error::Layout {
         what,
         address: *key,
         reason,
     };
-    let data = &account.data;
-    if data.len() < 165 || (data.len() > 165 && data.get(165) != Some(&2)) {
-        return Err(bad("not a token account"));
-    }
-    if data[..32] != *mint.as_array() {
+    if parsed.mint != *mint {
         return Err(bad("holds a different mint"));
     }
-    if data[32..64] != *owner.as_array() {
+    if parsed.owner != *owner {
         return Err(bad("belongs to a different owner"));
     }
-    if data[108] == 0 {
-        return Err(bad("token account is not initialized"));
-    }
-    Ok(u64_at(data, 64))
+    Ok(parsed.amount)
 }
 
 #[cfg(test)]

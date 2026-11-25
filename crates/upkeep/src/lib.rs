@@ -1,16 +1,20 @@
 //! Position valuations and upkeep instruction lists for earn vault keepers.
 //!
 //! Pure: no RPC, no async, no clock of its own. A keeper names the accounts a
-//! valuation needs ([`earn::EarnPlan::keys`], [`offerbook::OfferbookPlan::keys`]),
+//! valuation needs ([`earn::EarnPlan::keys`], [`offerbook::OfferbookPlan::keys`],
+//! [`fluid::FluidPlan::keys`]),
 //! fetches them with one `getMultipleAccounts` at one slot, wraps the result in a
 //! [`Snapshot`] (which must include the clock sysvar), and gets back the value
 //! `PriceOpaqueArgs.value` takes: numéraire micro-units, `u64`, with every input
-//! it used.
+//! it used. A JupiterLend valuation also takes the vault authority's token
+//! listing ([`listing`]) and, for Fluid positions, the simulated exchange
+//! prices ([`fluid`]), each read at the snapshot's slot.
 //!
 //! Rules every valuation keeps:
 //! - **Fail closed.** A key the snapshot never fetched, a missing account that
-//!   must exist, a wrong owner or layout, a stale or out-of-band price, or an
-//!   overdue Offerbook loan is an [`Error`], never a zero.
+//!   must exist, a wrong owner or layout, a stale or out-of-band price, an
+//!   overdue Offerbook loan, a Fluid position in liquidation, or a holding the
+//!   listing shows but nothing values is an [`Error`], never a zero.
 //! - **Round against the vault.** Assets are struck at price − confidence and
 //!   rounded down; liabilities at price + confidence and rounded up. This is
 //!   the vault program's own band (`Floor` for holdings, `Ceil` for payouts).
@@ -22,7 +26,9 @@
 //! requires. Lists, never transactions: every signer mode wraps the same list.
 
 pub mod earn;
+pub mod fluid;
 pub mod jobs;
+pub mod listing;
 pub mod mark;
 pub mod offerbook;
 pub mod price;
@@ -80,6 +86,30 @@ pub enum Error {
     LoansChanged,
     #[error("liabilities exceed assets by {shortfall} micro-units; no unsigned mark exists")]
     Negative { shortfall: u64 },
+    /// A read that must come from the snapshot's slot came from another.
+    #[error("{what} was read at slot {read}, the snapshot at {snapshot}")]
+    ReadSlot {
+        what: &'static str,
+        read: u64,
+        snapshot: u64,
+    },
+    /// The vault authority's token listing is incomplete or malformed.
+    #[error("token listing is unusable: {0}")]
+    Listing(&'static str),
+    /// A token account the vault authority holds that this valuation cannot
+    /// attribute to a priced holding.
+    #[error("vault authority's token account {account} ({mint}) is unattributed: {reason}")]
+    Unattributed {
+        account: Address,
+        mint: Address,
+        reason: &'static str,
+    },
+    /// A Fluid position, vault or exchange price this crate does not value.
+    #[error("Fluid account {account} cannot be valued: {reason}")]
+    Fluid {
+        account: Address,
+        reason: &'static str,
+    },
     #[error("arithmetic overflow while valuing {0}")]
     Overflow(&'static str),
     #[error("invalid job: {0}")]

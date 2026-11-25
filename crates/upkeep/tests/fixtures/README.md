@@ -6,6 +6,16 @@ Vault states recorded from mainnet on 2026-11-25, one `getMultipleAccounts`
 custody ATAs. Loans were found with the `offerbook::loan_filters` scans just
 before the read. Reads only; nothing was sent.
 
+`bitwise-susdai-multiply.json` was recorded with one JSON-RPC batch of
+`getMultipleAccounts` over `FluidPlan::keys` (plus the custody ATAs), the vault
+authority's `getTokenAccountsByOwner` under both token programs, and a
+`simulateTransaction` of `get_exchange_prices` for Fluid vault 101. All four
+answered at slot 473,664,805, two seconds after the USDC row's refresh
+(60 s window). `positions` and `unrelated` are the discovery scans by
+`fluid::position_filters` taken just before. The earlier fixtures predate
+listings; their tests rebuild one from the recorded token accounts the
+authority owns. That shows the fold, not that the authority held nothing else.
+
 The vaults run program 0.1.0. Vault accounts have the same 2,334-byte layout on
 0.2.0, where 0.2.0's new fields read as zero.
 
@@ -15,6 +25,7 @@ The vaults run program 0.1.0. Vault accounts have the same 2,334-byte layout on
 | `bitwise-susdai-yield.json` | `Hj9eXER2esW7FMSX1UjgNk29ToX2rpa4QF6ZCKVvXgdH` | Earn, Offerbook (68 active lent loans, escrow yield) |
 | `re7-nopal-lending.json` | `6QDoDjzvgUKaaYBptR9CGebT4WUTKd7tTDRwvgD1jmvD` | Earn (empty), Offerbook (3 lent loans) |
 | `re7-nopal-looping.json` | `9EdtkcPbuM8zsyhknzo2CRLyPVXNJXCt6zgSjviMYCNc` | Offerbook (3 borrowed loans); its Nest slot is out of scope |
+| `bitwise-susdai-multiply.json` | `bcYAZdziuuaYHAkrT3WP3dLzDUQg7XJVPxYwXUaah5w` | Jupiter Lend: one Fluid T1 position (vault 101, NFT 189), sUSDai collateral, USDC debt |
 
 ## `expected`
 
@@ -44,3 +55,16 @@ Where the numbers differ:
   USDC). The managed path counts it.
 - RE7 Looping Offerbook: within 2 micro-units of the other copies, which round
   each loan separately. This crate sums per mint, then rounds once.
+- Bitwise sUSDai Multiply (`jupiter_lend`): `report_formula` is the research
+  report's Liquidity and vault index projection and conversion, run over the
+  same bytes in a separate script. It reproduces the simulated indices exactly
+  (Liquidity borrow 1,067,581,275,843, vault borrow 1,010,455,367,801), so it
+  equals `sdk`. `midpoint` prices both legs at the cached price with no
+  confidence band; `stored_indices` uses the stored vault borrow index without
+  projection, which understates the debt. `onchain_mark` was posted one slot
+  before the snapshot, in the same second, after the same USDC refresh and
+  manual sUSDai price. It is $6.290516 above `sdk`. Striking the USDC debt at
+  price − confidence instead of price + confidence accounts for $6.290278. A
+  borrow index about four seconds older, 245 micro-USDC less debt, accounts for
+  the rest to within rounding. That attribution is inferred from the numbers;
+  the posting keeper's inputs are not on chain.
