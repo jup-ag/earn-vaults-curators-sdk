@@ -313,6 +313,8 @@ impl OfferbookPlan {
         };
         let outstanding = u128::from(loan.principal_amount - loan.repaid_principal);
         if loan.lender == self.authority {
+            // shortcut: Offerbook takes its repay fee out of the lender's interest,
+            // and this counts the interest gross; deduct it once the fee profile is read.
             // Offerbook's own accrual: interest over the elapsed share of the
             // current period, which starts `duration` before expiry.
             let duration = u64::from(loan.duration);
