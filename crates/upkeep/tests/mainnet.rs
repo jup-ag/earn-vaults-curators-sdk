@@ -299,3 +299,22 @@ fn a_stale_clock_or_tampered_account_never_values() {
     let stolen = f.with(&receipt, |a| a.data[32..64].copy_from_slice(&[9; 32]));
     assert!(matches!(plan.value(&stolen), Err(Error::Layout { .. })));
 }
+
+#[test]
+fn earn_rejects_a_zero_exchange_price() {
+    let f = load("bitwise-juplend-optimizer");
+    let plan = EarnPlan::new(f.vault, &f.snapshot(), EarnScope::LenderOnly).unwrap();
+    let lending = plan.rows[0].market.lending;
+    // Receipts × 0 would read as a silent zero; it must be an error.
+    let zero_price = f.with(&lending, |a| {
+        a.data[115..123].copy_from_slice(&0u64.to_le_bytes())
+    });
+    assert_eq!(
+        plan.value(&zero_price),
+        Err(Error::Layout {
+            what: "Earn Lending",
+            address: lending,
+            reason: "zero exchange price",
+        })
+    );
+}
