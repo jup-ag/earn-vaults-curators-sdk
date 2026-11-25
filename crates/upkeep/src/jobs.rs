@@ -17,6 +17,7 @@ use {
     crate::{Error, Result, earn::PlannedRow, mark::Mark, snapshot::Account},
     earn_vaults_sdk::{
         instructions::{CrystallizeFees, FulfillRedeem, PriceOpaque, ValidateAum},
+        nav::shares_for_deposit,
         pda::{derive_associated_token_account, derive_escrow, derive_share_mint},
         state::{
             Account as _, Escrow, FULFILLED_PARTIAL, FULFILLED_PENDING, Pause, REQUEST_TYPE_REDEEM,
@@ -106,11 +107,6 @@ pub fn attest(
     for (i, mark) in marks.iter().enumerate() {
         if marks[..i].iter().any(|m| m.slot == mark.slot) {
             return Err(Error::Job("two marks for one slot"));
-        }
-        if mark.bootstrap && mark.value == 0 {
-            return Err(Error::Job(
-                "a zero bootstrap mark would lock the slot at zero",
-            ));
         }
     }
     let mut ixs = refresh;
@@ -253,15 +249,42 @@ pub fn crystallize(keys: &VaultKeys, prior: Vec<Instruction>, payer: Address) ->
 /// The program refuses a fill that leaves fee debt above half the AUM left
 /// behind, while a crystallization could mint. Whether a fill trips that
 /// depends on the AUM this transaction's `ValidateAum` computes, which a
-/// builder cannot know, so crystallize whenever any fee is owed and a mint is
-/// possible. Crystallizing early changes no value: the fee is owed either way.
-/// `false` while subscriptions are paused, since `CrystallizeFees` is refused
-/// then; a fill that needs it fails on chain and waits for the unpause.
+/// builder cannot know, so crystallize whenever fees are owed and
+/// `CrystallizeFees` would succeed. Crystallizing early changes no value.
+///
+/// `CrystallizeFees` fails, and takes the fill down with it, while
+/// subscriptions are paused, on a zero fee-net AUM, or when both recipients'
+/// fee shares round to zero (`FeeAmountTooSmall`), so each of those returns
+/// `false`. This replays the program's fold and share conversion on a copy
+/// of the vault. shortcut: against the stored AUM, so a fee within a share or
+/// two of rounding to zero can still flip once `ValidateAum` restates AUM.
 pub fn crystallize_before_fill(vault_data: &[u8], share_supply: u64, now: i64) -> Result<bool> {
-    let vault = Vault::read(vault_data).map_err(|_| Error::Job("not a vault account"))?;
-    Ok(vault.paused & Pause::Subscribe as u8 == 0
-        && !vault.fee_mint_blocked(vault.eff_supply(share_supply))
-        && vault.raw_fee_liability(share_supply, now) > 0)
+    let mut data = vault_data.to_vec();
+    let vault = Vault::read_mut(&mut data).map_err(|_| Error::Job("not a vault account"))?;
+    let eff_supply = vault.eff_supply(share_supply);
+    if vault.paused & Pause::Subscribe as u8 != 0
+        || eff_supply == 0
+        || vault.fee_mint_blocked(eff_supply)
+        || vault.raw_fee_liability(share_supply, now) == 0
+    {
+        return Ok(false);
+    }
+    vault.accrue_fees(share_supply, now);
+    let fee_net_aum = vault.eff_aum(share_supply, now);
+    if fee_net_aum == 0 {
+        return Ok(false);
+    }
+    // The program prices fee shares against the fee-net book plus the
+    // confidence band reserve, rounded up.
+    let reserve =
+        (u128::from(vault.aum.get()) * u128::from(vault.aum_conf_bps.get())).div_ceil(10_000);
+    let fee_basis = u64::try_from(u128::from(fee_net_aum) + reserve)
+        .map_err(|_| Error::Overflow("fee basis"))?;
+    let fees = vault.fee_breakdown();
+    let shares = |amount| {
+        shares_for_deposit(amount, eff_supply, fee_basis).map_err(|_| Error::Overflow("fee shares"))
+    };
+    Ok(shares(fees.curator_total())? > 0 || shares(fees.protocol_total())? > 0)
 }
 
 #[cfg(test)]
@@ -347,11 +370,17 @@ mod tests {
     }
 
     #[test]
-    fn attest_refuses_a_zero_bootstrap_and_duplicate_slots() {
+    fn attest_refuses_duplicate_slots_and_places_a_zero_first_mark() {
         let data = vault_bytes();
         let keys = keys(&data);
-        assert!(attest(&keys, vec![], &[mark(0, 0, true)]).is_err());
         assert!(attest(&keys, vec![], &[mark(0, 1, false), mark(0, 2, false)]).is_err());
+        // Past bootstrap, `decide` yields a zero first mark to attest an
+        // empty slot; it goes after a validation like any first mark.
+        let ixs = attest(&keys, vec![], &[mark(0, 0, true)]).unwrap();
+        assert_eq!(ixs.len(), 3);
+        assert_eq!(ixs[0], keys.validate_aum());
+        assert_eq!(slot_of(&ixs[1]), Some(0));
+        assert_eq!(ixs[2], keys.validate_aum());
     }
 
     #[test]
@@ -461,7 +490,7 @@ mod tests {
     }
 
     #[test]
-    fn crystallize_before_a_fill_whenever_fees_are_owed_and_can_mint() {
+    fn crystallize_before_a_fill_only_when_the_fee_can_mint() {
         let mut data = vault_bytes();
         let now = 1_000_000;
         {
@@ -472,8 +501,12 @@ mod tests {
         }
         // No fee debt: nothing to crystallize.
         assert_eq!(crystallize_before_fill(&data, 100_000_000, now), Ok(false));
-        // Any debt: crystallize, whatever AUM the fill will see.
+        // Dust that rounds to zero fee shares: CrystallizeFees would fail with
+        // FeeAmountTooSmall and take the fill down, so leave it out.
         Vault::read_mut(&mut data).unwrap().perf_fee_accrued = U64::from(1u64);
+        assert_eq!(crystallize_before_fill(&data, 100_000_000, now), Ok(false));
+        // A fee that mints: crystallize, whatever AUM the fill will see.
+        Vault::read_mut(&mut data).unwrap().perf_fee_accrued = U64::from(1_000_000u64);
         assert_eq!(crystallize_before_fill(&data, 100_000_000, now), Ok(true));
         // Not while subscriptions are paused (CrystallizeFees would fail) or a
         // mint is impossible (the program waives the gate).
