@@ -2,7 +2,9 @@
 //! price and the underlying row's floor price.
 //!
 //! The vault's Earn position is one lender-only JupiterLend slot carrying every
-//! Earn market the vault holds. Its value is, per market,
+//! Earn market the vault holds. (A JupiterLend slot that is not lender-only can
+//! also hold Fluid positions; [`crate::fluid`] values it.) Its value is, per
+//! market,
 //! `floor(receipts × token_exchange_price / 1e12)` underlying units at the
 //! row's price − confidence, rounded down, summed. Idle custody is not part of
 //! the mark: `ValidateAum` prices custody itself.
@@ -10,10 +12,16 @@
 //! The exchange price is the one stored on the `Lending` account, without the
 //! interest accrued since its last update. That lags the true value slightly,
 //! never above it.
+//!
+//! The plan reads only the canonical receipt account of each configured row.
+//! The vault authority's token listing at the same slot proves there is
+//! nothing else: receipts for a row that was removed, or outside the canonical
+//! account, fail closed ([`crate::listing`]).
 
 use {
     crate::{
         Error, Result,
+        listing::{Ignored, TokenListing, attribute},
         mark::{SlotState, find_slot, vault_in_bootstrap},
         price::{RowPrice, Side, gate},
         snapshot::{CLOCK_SYSVAR_ID, Snapshot, mint, owned_by, token_account, token_balance},
@@ -224,38 +232,36 @@ pub(crate) fn check_rows(snapshot: &Snapshot, vault: &Vault, rows: &[PlannedRow]
     Ok(())
 }
 
-/// Which JupiterLend slots the Earn valuation accepts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EarnScope {
-    /// Only a lender-only slot, which the program keeps Earn-only.
-    LenderOnly,
-    /// Also a slot that is not lender-only, on the caller's word that it holds
-    /// no Fluid vault positions. shortcut: the vault cannot prove that from
-    /// account reads alone; replace with Fluid valuation (S6).
-    AssumeNoFluid,
-}
-
 /// Where the Earn mark's inputs live. Build once per vault configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EarnPlan {
     pub vault: Address,
     pub authority: Address,
     pub slot: u8,
-    pub scope: EarnScope,
     pub rows: Vec<PlannedRow>,
+    /// Mints the authority held at discovery that have no Fluid `Position`
+    /// (see [`crate::listing`]).
+    pub unrelated: Vec<Address>,
 }
 
 impl EarnPlan {
-    /// `snapshot` holds the vault and [`discovery_keys`].
-    pub fn new(vault: Address, snapshot: &Snapshot, scope: EarnScope) -> Result<Self> {
+    /// `snapshot` holds the vault and [`discovery_keys`]. `unrelated` are the
+    /// [`crate::listing::candidate_mints`] the Fluid `Position` scan found
+    /// nothing for. The vault's JupiterLend slot must be lender-only; a slot
+    /// that is not is valued by [`crate::fluid::FluidPlan`].
+    pub fn new(
+        vault: Address,
+        snapshot: &Snapshot,
+        unrelated: impl IntoIterator<Item = Address>,
+    ) -> Result<Self> {
         let state = snapshot.vault(&vault)?;
-        let (slot, _) = earn_slot(state, scope)?;
+        let (slot, _) = jupiter_lend_slot(state, true)?;
         Ok(Self {
             vault,
             authority: derive_vault_authority(&vault),
             slot,
-            scope,
             rows: planned_rows(snapshot, state)?,
+            unrelated: sorted(unrelated),
         })
     }
 
@@ -266,72 +272,108 @@ impl EarnPlan {
             keys.push(row.market.mint);
             keys.extend(row.market.keys(&self.authority));
         }
+        keys.extend(&self.unrelated);
         keys
     }
 
-    pub fn value(&self, snapshot: &Snapshot) -> Result<EarnValuation> {
+    /// `listings` are the vault authority's token accounts at the snapshot's
+    /// slot: every positive balance must be custody or a canonical receipt
+    /// account of a configured row (see [`crate::listing`]).
+    pub fn value(&self, snapshot: &Snapshot, listings: &[TokenListing]) -> Result<EarnValuation> {
         let now = snapshot.now()?;
         let vault = snapshot.vault(&self.vault)?;
-        let (slot, position) = earn_slot(vault, self.scope)?;
+        let (slot, position) = jupiter_lend_slot(vault, true)?;
         if slot != self.slot {
             return Err(Error::PlanStale("Earn slot"));
         }
         check_rows(snapshot, vault, &self.rows)?;
-        let mut value = 0u64;
-        let mut markets = Vec::new();
-        for row in &self.rows {
-            let Some(receipts) = row
-                .market
-                .redeemable(snapshot, &self.authority, row.decimals)?
-            else {
-                continue;
-            };
-            // A zero holding needs no price, as in `ValidateAum`.
-            let (price, worth) = if receipts.underlying == 0 {
-                (None, 0)
-            } else {
-                let price = gate(row.row, &vault.assets[row.row as usize], now)?;
-                let worth = price.value(receipts.underlying.into(), Side::Asset)?;
-                (Some(price), worth)
-            };
-            value = value
-                .checked_add(worth)
-                .ok_or(Error::Overflow("Earn value"))?;
-            markets.push(EarnMarketValue {
-                row: row.row,
-                market: row.market,
-                receipts,
-                price,
-                value: worth,
-            });
-        }
+        let ignored = attribute(
+            snapshot,
+            &self.authority,
+            &self.rows,
+            &[],
+            &self.unrelated,
+            listings,
+        )?
+        .ignored;
+        let (value, markets) = value_markets(snapshot, vault, &self.authority, &self.rows, now)?;
         Ok(EarnValuation {
             slot: SlotState::of(slot, position, in_bootstrap(snapshot, &self.vault, vault)?),
             now,
             value,
             markets,
+            ignored,
         })
     }
 }
 
-/// The vault's Earn slot: enabled, lender-only JupiterLend, counted in AUM,
-/// not debt. A JupiterLend slot that is not lender-only can hold Fluid vault
-/// positions, which this crate does not value.
-fn earn_slot(
+/// Sorted and deduplicated.
+pub(crate) fn sorted(keys: impl IntoIterator<Item = Address>) -> Vec<Address> {
+    let mut keys: Vec<_> = keys.into_iter().collect();
+    keys.sort();
+    keys.dedup();
+    keys
+}
+
+/// `holder`'s receipts in every planned market, each at its row's floor price.
+pub(crate) fn value_markets(
+    snapshot: &Snapshot,
     vault: &Vault,
-    scope: EarnScope,
+    holder: &Address,
+    rows: &[PlannedRow],
+    now: i64,
+) -> Result<(u64, Vec<EarnMarketValue>)> {
+    let mut value = 0u64;
+    let mut markets = Vec::new();
+    for row in rows {
+        let Some(receipts) = row.market.redeemable(snapshot, holder, row.decimals)? else {
+            continue;
+        };
+        // A zero holding needs no price, as in `ValidateAum`.
+        let (price, worth) = if receipts.underlying == 0 {
+            (None, 0)
+        } else {
+            let price = gate(row.row, &vault.assets[row.row as usize], now)?;
+            let worth = price.value(receipts.underlying.into(), Side::Asset)?;
+            (Some(price), worth)
+        };
+        value = value
+            .checked_add(worth)
+            .ok_or(Error::Overflow("Earn value"))?;
+        markets.push(EarnMarketValue {
+            row: row.row,
+            market: row.market,
+            receipts,
+            price,
+            value: worth,
+        });
+    }
+    Ok((value, markets))
+}
+
+/// The vault's JupiterLend slot: enabled, counted in AUM, not debt, and
+/// lender-only exactly when `lender_only`. A lender-only slot is Earn-only: the
+/// program refuses Fluid Vaults routes on it. A slot that is not lender-only
+/// can also hold Fluid vault positions.
+pub(crate) fn jupiter_lend_slot(
+    vault: &Vault,
+    lender_only: bool,
 ) -> Result<(u8, &earn_vaults_sdk::state::PositionConfig)> {
     let (slot, position) = find_slot(vault, Protocol::JupiterLend)
-        .ok_or(Error::Position("Jupiter Earn", "no enabled slot"))?;
-    if !position.lender_only() && scope == EarnScope::LenderOnly {
+        .ok_or(Error::Position("Jupiter Lend", "no enabled slot"))?;
+    if position.lender_only() != lender_only {
         return Err(Error::Position(
-            "Jupiter Earn",
-            "slot is not lender-only, so it may hold Fluid vault positions",
+            "Jupiter Lend",
+            if lender_only {
+                "slot is not lender-only, so it may hold Fluid vault positions: use FluidPlan"
+            } else {
+                "slot is lender-only, so it holds only Earn receipts: use EarnPlan"
+            },
         ));
     }
     if position.debt() || !position.required_in_aum() {
         return Err(Error::Position(
-            "Jupiter Earn",
+            "Jupiter Lend",
             "slot is debt or not counted in AUM",
         ));
     }
@@ -358,6 +400,8 @@ pub struct EarnValuation {
     /// `PriceOpaqueArgs.value` for the slot.
     pub value: u64,
     pub markets: Vec<EarnMarketValue>,
+    /// Holdings the listing showed that are neither Earn nor Fluid.
+    pub ignored: Vec<Ignored>,
 }
 
 impl EarnValuation {
