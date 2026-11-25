@@ -10,7 +10,7 @@
 //! Rules every valuation keeps:
 //! - **Fail closed.** A key the snapshot never fetched, a missing account that
 //!   must exist, a wrong owner or layout, a stale or out-of-band price, or an
-//!   overdue or extended Offerbook loan is an [`Error`], never a zero.
+//!   overdue Offerbook loan is an [`Error`], never a zero.
 //! - **Round against the vault.** Assets are struck at price − confidence and
 //!   rounded down; liabilities at price + confidence and rounded up. This is
 //!   the vault program's own band (`Floor` for holdings, `Ceil` for payouts).

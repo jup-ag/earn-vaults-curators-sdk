@@ -13,7 +13,6 @@ use {
         offerbook::OfferbookPlan,
         snapshot::CLOCK_SYSVAR_ID,
     },
-    offerbook_client::state::Loan,
     serde_json::Value,
     solana_address::Address,
 };
@@ -112,7 +111,7 @@ fn juplend_optimizer_earn_equals_the_optimizer_and_the_chain() {
     let earn = plan.value(&snapshot).unwrap();
     assert_eq!(earn.value, f.expect("earn", "sdk"));
     assert_eq!(earn.value, f.expect("earn", "optimizer"));
-    // Marked 8 s before, from the same exchange and row prices.
+    // Marked seconds before, from the same exchange and row prices.
     assert_eq!(earn.value, f.expect("earn", "onchain_mark"));
     assert_eq!(earn.markets.len(), 5);
     assert!(
@@ -168,37 +167,40 @@ fn susdai_yield_matches_the_existing_copies_and_the_chain() {
     assert_eq!(plan.lent.len(), 68);
     let book = plan.value(&snapshot).unwrap();
     assert_eq!(book.value, f.expect("offerbook", "sdk"));
-    // The market maker's managed mark counts escrow yield too; the API and the
-    // borrowing path leave its jlUSDC out.
-    assert_eq!(book.value, f.expect("offerbook", "mm_managed"));
+    // The market maker's managed mark counts escrow yield too, but no repay
+    // fee; the API and the borrowing path leave the jlUSDC out.
+    assert!(book.value < f.expect("offerbook", "mm_managed"));
     assert!(book.value > f.expect("offerbook", "curator_api"));
     assert!(bps(book.value, f.expect("offerbook", "onchain_mark")) < 1.0);
     assert_eq!(book.liabilities, 0);
+    assert_eq!(
+        book.repay_fee_bps,
+        Some(f.expect("offerbook", "repay_fee_bps") as u16)
+    );
 }
 
 #[test]
-fn re7_books_with_extended_loans_fail_closed() {
-    for name in ["re7-nopal-lending", "re7-nopal-looping"] {
-        let f = load(name);
-        let snapshot = f.snapshot();
-        let plan = f.offerbook();
-        f.covers(&plan.keys());
-        let error = plan.value(&snapshot).unwrap_err();
-        assert!(
-            matches!(
-                error,
-                Error::Loan {
-                    reason: "extended loans need manual valuation",
-                    ..
-                }
-            ),
-            "{name}: {error}"
-        );
-    }
-    // Its Earn slot holds nothing: zero, and since it was marked before, a
-    // zero mark is posted rather than skipped.
+fn re7_lending_values_extended_loans_by_their_current_period() {
     let f = load("re7-nopal-lending");
     let snapshot = f.snapshot();
+    let plan = f.offerbook();
+    f.covers(&plan.keys());
+    let book = plan.value(&snapshot).unwrap();
+    assert_eq!(book.value, f.expect("offerbook", "sdk"));
+    // The vault's own Offerbook fee profile sets the repay fee.
+    assert_eq!(
+        book.repay_fee_bps,
+        Some(f.expect("offerbook", "repay_fee_bps") as u16)
+    );
+    // The API refuses extended loans. With the extension count cleared, it and
+    // the market maker accrue from `created_at`, which books the whole period's
+    // interest again, and take no repay fee: both read high.
+    let other = f.expect("offerbook", "curator_api_if_extended_allowed");
+    assert_eq!(other, f.expect("offerbook", "mm_borrowing"));
+    assert!(other > book.value);
+
+    // Its Earn slot holds nothing: zero, and since it was marked before, a
+    // zero mark is posted rather than skipped.
     let earn = EarnPlan::new(f.vault, &snapshot, EarnScope::LenderOnly)
         .unwrap()
         .value(&snapshot)
@@ -213,29 +215,14 @@ fn re7_books_with_extended_loans_fail_closed() {
     );
 }
 
-/// The loans with `extension_count` cleared, so the netting runs on real bytes.
-fn unextended(f: &Fixture) -> Snapshot {
-    let mut accounts = f.accounts.clone();
-    for (key, account) in &mut accounts {
-        if f.lent.contains(key) || f.borrowed.contains(key) {
-            let account = account.as_mut().unwrap();
-            let mut loan = Loan::from_account_data(&account.data).unwrap();
-            loan.extension_count = 0;
-            account.data = [
-                Loan::DISCRIMINATOR.to_vec(),
-                offerbook_client::serialize(&loan).unwrap(),
-            ]
-            .concat();
-        }
-    }
-    Snapshot::new(f.slot, accounts).unwrap()
-}
-
 #[test]
 fn re7_looping_nets_collateral_against_full_debt() {
     let f = load("re7-nopal-looping");
-    let book = f.offerbook().value(&unextended(&f)).unwrap();
-    assert_eq!(book.value, f.expect("offerbook", "sdk_if_extended_allowed"));
+    let snapshot = f.snapshot();
+    let plan = f.offerbook();
+    f.covers(&plan.keys());
+    let book = plan.value(&snapshot).unwrap();
+    assert_eq!(book.value, f.expect("offerbook", "sdk"));
     // Per-loan rounding in the other copies differs by at most a micro-unit per loan.
     for other in ["curator_api_if_extended_allowed", "mm_borrowing"] {
         assert!(
@@ -246,18 +233,7 @@ fn re7_looping_nets_collateral_against_full_debt() {
     // Three borrowed loans: 157,633 USDC principal + 166 USDC interest, owed in full.
     assert_eq!(book.liabilities, 157_788_279_244);
     assert_eq!(book.value, book.assets - book.liabilities);
-}
-
-#[test]
-fn re7_lending_accrues_extended_loans_from_the_current_period() {
-    let f = load("re7-nopal-lending");
-    let book = f.offerbook().value(&unextended(&f)).unwrap();
-    assert_eq!(book.value, f.expect("offerbook", "sdk_if_extended_allowed"));
-    // The other copies accrue from `created_at`, which after an extension
-    // books the whole period's interest again: 123 USDC more here.
-    let api = f.expect("offerbook", "curator_api_if_extended_allowed");
-    assert_eq!(api - book.value, 123_058_137);
-    assert_eq!(api, f.expect("offerbook", "mm_borrowing"));
+    assert_eq!(book.repay_fee_bps, None, "a borrower pays no repay fee");
 }
 
 #[test]

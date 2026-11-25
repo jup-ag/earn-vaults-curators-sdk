@@ -26,20 +26,21 @@ All values are numéraire micro-units.
   Offerbook market maker, run over the same bytes in a separate harness. The API
   prices Offerbook holdings from live Pyth Pro; the harness gave it the vault's
   cached row prices so the inputs match.
-- `*_if_extended_allowed`: the same, with each loan's `extension_count` cleared.
-  This crate and the API refuse extended loans; these numbers show what the
-  netting gives on real loans.
+- `*_if_extended_allowed`: the curator API refuses extended loans; this is its
+  value with each loan's `extension_count` cleared, to compare the netting.
+- `repay_fee_bps`: the fee Offerbook takes from the vault's lent interest, from
+  the vault's own Offerbook fee profile or else `Config.repay_fee_bps`.
 - `onchain_mark`: the slot's `last_value` at the recorded slot, posted
   `onchain_mark_age_seconds` before it.
 
 Where the numbers differ:
 
-- sUSDai Yield Offerbook: the API and the market maker's borrowing path leave
-  out the jlUSDC escrow yield the Offerbook `User` holds (22,499 USDC). The
-  managed path counts it, and equals this crate.
-- RE7 Lending Offerbook: the other copies accrue lent interest from
-  `created_at`. After an extension that books the whole period's interest again
-  (123.06 USDC here). This crate accrues from the start of the current period,
-  as Offerbook does (`expired_at − duration`).
+- Lent interest: this crate counts interest from the start of the loan's
+  current period (`expired_at − duration`), as Offerbook does, less Offerbook's
+  repay fee rounded up. The other copies count from `created_at`, which after an
+  extension books the whole period again, and deduct no fee. Both read high.
+- sUSDai Yield Offerbook: the API and the market maker's borrowing path also
+  leave out the jlUSDC escrow yield the Offerbook `User` holds (about 22,500
+  USDC). The managed path counts it.
 - RE7 Looping Offerbook: within 2 micro-units of the other copies, which round
   each loan separately. This crate sums per mint, then rounds once.

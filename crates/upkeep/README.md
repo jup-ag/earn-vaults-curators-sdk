@@ -20,7 +20,7 @@ if let MarkDecision::Post { value, bootstrap } = earn.slot.decide(earn.value) {
 
 - `earn`: Jupiter Earn receipts in every market the vault holds, at the stored
   exchange price and the row's floor price.
-- `offerbook`: escrow, escrow yield, lent loans, and borrowed loans (collateral
+- `offerbook`: escrow, escrow yield, lent loans (net of Offerbook's repay fee), and borrowed loans (collateral
   less debt). Loans come from `getProgramAccounts` with `loan_filters`; the
   `User` loan counters prove none appeared since.
 - `mark`: which slots are due, and `decide`, which never posts a zero first mark.

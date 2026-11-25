@@ -9,14 +9,17 @@
 //! |---|---|---|
 //! | Escrow cash | asset | `User` ATA balance per row mint |
 //! | Escrow yield | asset | `User` jlToken receipts × stored exchange price |
-//! | Lent loan | asset | outstanding principal + interest accrued this period |
+//! | Lent loan | asset | outstanding principal + interest accrued this period, less Offerbook's repay fee |
 //! | Borrowed loan, collateral | asset | the loan vault's balance |
 //! | Borrowed loan, debt | liability | outstanding principal + the period's full interest |
 //!
 //! Open offers hold no funds outside the escrow, so they add nothing. Amounts
 //! are summed per mint and side, then priced off the vault rows: assets at
 //! price − confidence rounded down, liabilities at price + confidence rounded
-//! up. Overdue or extended loans, and any mint without a row, fail closed.
+//! up. Interest follows Offerbook's own accounting: it accrues from the start
+//! of the current period (`expired_at − duration`), so an extended loan counts
+//! only the period it is in; the borrower paid the earlier ones at extension.
+//! Overdue loans, and any mint without a row, fail closed.
 //!
 //! Loans are found with `getProgramAccounts` ([`loan_filters`]), outside the
 //! one-slot read. The `User`'s loan counters bind the two: a loan created after
@@ -32,11 +35,11 @@ use {
         snapshot::{CLOCK_SYSVAR_ID, Snapshot, owned_by, token_balance},
     },
     earn_vaults_sdk::{
-        offerbook::{PROGRAM_ID, derive_loan_vault, derive_user},
+        offerbook::{PROGRAM_ID, derive_config, derive_loan_vault, derive_user},
         pda::{derive_associated_token_account, derive_vault_authority},
         state::{Protocol, Vault},
     },
-    offerbook_client::state::{Asset, Loan, LoanStatus, LoanType, User},
+    offerbook_client::state::{Asset, Config, Loan, LoanStatus, LoanType, User},
     solana_address::Address,
     std::collections::BTreeMap,
 };
@@ -117,7 +120,7 @@ impl OfferbookPlan {
             user,
             slot,
             rows: planned_rows(snapshot, state)?,
-            loan_counters: user_counters(snapshot, &user, &authority)?,
+            loan_counters: counters(read_user(snapshot, &user, &authority)?.as_ref()),
             lent,
             borrowed,
         })
@@ -135,6 +138,10 @@ impl OfferbookPlan {
             keys.push(self.escrow_account(row));
             keys.extend(row.market.keys(&self.user));
         }
+        if !self.lent.is_empty() {
+            // Its repay fee comes out of the interest the vault earns as lender.
+            keys.push(derive_config());
+        }
         keys.extend(&self.lent);
         for loan in &self.borrowed {
             keys.push(*loan);
@@ -151,9 +158,12 @@ impl OfferbookPlan {
             return Err(Error::PlanStale("Offerbook slot"));
         }
         check_rows(snapshot, vault, &self.rows)?;
-        if user_counters(snapshot, &self.user, &self.authority)? != self.loan_counters {
+        let user = read_user(snapshot, &self.user, &self.authority)?;
+        if counters(user.as_ref()) != self.loan_counters {
             return Err(Error::LoansChanged);
         }
+        // Lazily: only a lent loan needs the fee, and only then must Config exist.
+        let mut repay_fee_bps = None;
 
         let mut components = Vec::new();
         for row in &self.rows {
@@ -198,7 +208,17 @@ impl OfferbookPlan {
                 reason: "expiry out of range",
             })?;
             expires_at = Some(expires_at.map_or(expiry, |e| e.min(expiry)));
-            components.extend(self.loan_components(snapshot, key, &loan, now)?);
+            let fee_bps = if lent {
+                match repay_fee_bps {
+                    Some(bps) => bps,
+                    None => {
+                        *repay_fee_bps.insert(lender_fee_bps(snapshot, &self.user, user.as_ref())?)
+                    }
+                }
+            } else {
+                0
+            };
+            components.extend(self.loan_components(snapshot, key, &loan, now, fee_bps)?);
         }
         components.retain(|c| c.amount != 0);
 
@@ -255,6 +275,7 @@ impl OfferbookPlan {
             components,
             totals,
             valid_until,
+            repay_fee_bps,
         })
     }
 
@@ -288,9 +309,6 @@ impl OfferbookPlan {
         if loan.duration == 0 {
             return Err(fail("zero duration"));
         }
-        if loan.extension_count != 0 {
-            return Err(fail("extended loans need manual valuation"));
-        }
         if u64::try_from(now).map_or(true, |now| now > loan.expired_at) {
             return Err(fail("past due"));
         }
@@ -306,6 +324,7 @@ impl OfferbookPlan {
         key: &Address,
         loan: &Loan,
         now: i64,
+        repay_fee_bps: u16,
     ) -> Result<Vec<Component>> {
         let fail = |reason| Error::Loan { loan: *key, reason };
         let Asset::Token(principal) = &loan.principal else {
@@ -313,21 +332,22 @@ impl OfferbookPlan {
         };
         let outstanding = u128::from(loan.principal_amount - loan.repaid_principal);
         if loan.lender == self.authority {
-            // shortcut: Offerbook takes its repay fee out of the lender's interest,
-            // and this counts the interest gross; deduct it once the fee profile is read.
             // Offerbook's own accrual: interest over the elapsed share of the
-            // current period, which starts `duration` before expiry.
+            // current period, which starts `duration` before expiry. At repay
+            // or extension Offerbook keeps `repay_fee_bps` of the interest; the
+            // fee is rounded up here, so the receivable never reads high.
             let duration = u64::from(loan.duration);
             let elapsed = u64::try_from(now)
                 .unwrap_or(0)
                 .saturating_sub(loan.expired_at.saturating_sub(duration))
                 .min(duration);
             let accrued = u128::from(loan.interest) * u128::from(elapsed) / u128::from(duration);
+            let fee = (accrued * u128::from(repay_fee_bps)).div_ceil(10_000);
             return Ok(vec![Component {
                 kind: Kind::LoanReceivable,
                 mint: principal.mint,
                 account: *key,
-                amount: to_u64(outstanding + accrued)?,
+                amount: to_u64(outstanding + accrued.saturating_sub(fee))?,
                 side: Side::Asset,
             }]);
         }
@@ -394,9 +414,9 @@ fn offerbook_slot(vault: &Vault) -> Result<(u8, &earn_vaults_sdk::state::Positio
     Ok((slot, position))
 }
 
-fn user_counters(snapshot: &Snapshot, key: &Address, authority: &Address) -> Result<(u64, u64)> {
+fn read_user(snapshot: &Snapshot, key: &Address, authority: &Address) -> Result<Option<User>> {
     let Some(account) = snapshot.get(key)? else {
-        return Ok((0, 0));
+        return Ok(None);
     };
     owned_by(account, key, &PROGRAM_ID, "Offerbook User")?;
     let user = User::from_account_data(&account.data).ok_or(Error::Layout {
@@ -411,7 +431,35 @@ fn user_counters(snapshot: &Snapshot, key: &Address, authority: &Address) -> Res
             reason: "belongs to another owner",
         });
     }
-    Ok((user.total_lender_loans, user.total_borrower_loans))
+    Ok(Some(user))
+}
+
+fn counters(user: Option<&User>) -> (u64, u64) {
+    user.map_or((0, 0), |u| (u.total_lender_loans, u.total_borrower_loans))
+}
+
+/// `User.FLAG_CUSTOM_FEES`: the user's own fee rates replace the config's.
+const USER_FLAG_CUSTOM_FEES: u8 = 1 << 1;
+
+/// The repay fee Offerbook takes from the vault's interest as lender: its own
+/// fee profile when set, otherwise `Config.repay_fee_bps`.
+fn lender_fee_bps(snapshot: &Snapshot, key: &Address, user: Option<&User>) -> Result<u16> {
+    let user = user.ok_or(Error::Missing {
+        what: "Offerbook User",
+        address: *key,
+    })?;
+    if user.flags & USER_FLAG_CUSTOM_FEES != 0 {
+        return Ok(user.repay_fee_bps);
+    }
+    let key = derive_config();
+    let account = snapshot.require(&key, "Offerbook Config")?;
+    owned_by(account, &key, &PROGRAM_ID, "Offerbook Config")?;
+    let config = Config::from_account_data(&account.data).ok_or(Error::Layout {
+        what: "Offerbook Config",
+        address: key,
+        reason: "not a Config account",
+    })?;
+    Ok(config.repay_fee_bps)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -456,6 +504,8 @@ pub struct OfferbookValuation {
     pub totals: Vec<MintTotal>,
     /// The earliest of every price's gate expiry and every active loan's due time.
     pub valid_until: Option<i64>,
+    /// The repay fee taken out of lent interest; `None` without active lent loans.
+    pub repay_fee_bps: Option<u16>,
 }
 
 #[cfg(test)]
@@ -513,7 +563,44 @@ mod tests {
         some(TOKEN, data)
     }
 
+    fn config(repay_fee_bps: u16) -> Option<Account> {
+        let config = Config {
+            admin: Address::default(),
+            fee_authority: Address::default(),
+            config_bump: 0,
+            fee_authority_bump: 0,
+            _padding: [0; 6],
+            interest_fee_bps: 0,
+            repay_fee_bps,
+            liquidation_fee_bps: 0,
+            referral_rewards_fee_bps: 0,
+            referee_rewards_fee_bps: 0,
+            _padding1: [0; 6],
+            min_principal_amount: 0,
+            min_collateral_amount: 0,
+            min_duration: 0,
+            min_expiry: 0,
+            max_apy: 0,
+            max_duration: 0,
+            max_expiry: 0,
+            is_paused: 0,
+            disable_repayment: 0,
+            _padding2: [0; 2],
+            operator: Address::default(),
+            gated_collections: [Address::default(); 4],
+            _reserved: [0; 240],
+        };
+        let mut data = Config::DISCRIMINATOR.to_vec();
+        data.extend(offerbook_client::serialize(&config).unwrap());
+        some(PROGRAM_ID, data)
+    }
+
     fn user(lent: u64, borrowed: u64) -> Option<Account> {
+        custom_fee_user(lent, borrowed, None)
+    }
+
+    /// A `User`, with its own repay fee when `repay_fee_bps` is set.
+    fn custom_fee_user(lent: u64, borrowed: u64, repay_fee_bps: Option<u16>) -> Option<Account> {
         let user = User {
             owner: derive_vault_authority(&VAULT),
             referrer: Address::default(),
@@ -526,11 +613,15 @@ mod tests {
             updated_at: 0,
             created_at: 0,
             bump: 0,
-            flags: 0,
+            flags: if repay_fee_bps.is_some() {
+                USER_FLAG_CUSTOM_FEES
+            } else {
+                0
+            },
             _padding: [0; 6],
             yield_operator: Address::default(),
             origination_fee_bps: 0,
-            repay_fee_bps: 0,
+            repay_fee_bps: repay_fee_bps.unwrap_or(0),
             liquidation_fee_bps: 0,
             _padding2: [0; 2],
             _reserved: [0; 24],
@@ -602,6 +693,7 @@ mod tests {
             (USDC, mint()),
             (SOL, mint()),
             (user_key, user(1, 1)),
+            (derive_config(), config(1_000)),
             (
                 derive_associated_token_account(&user_key, &USDC, &TOKEN),
                 token(&USDC, &user_key, 250_000_000),
@@ -635,8 +727,8 @@ mod tests {
     fn escrow_and_loans_count_once_and_borrowing_is_subtracted() {
         let v = value(accounts(&loan(true), &loan(false))).unwrap();
         // Assets at $0.9999 / $99.9999 floor, liabilities at $1.0001 ceiling.
-        // Escrow 250 + lent 1,000 + 25% of 10 interest = 1,252.5 USDC.
-        let usdc_assets = 1_252_500_000u128 * 99_990_000 / 100_000_000;
+        // Escrow 250 + lent 1,000 + 25% of 10 interest less the 10% repay fee.
+        let usdc_assets = 1_252_250_000u128 * 99_990_000 / 100_000_000;
         // 20 SOL of collateral still locked.
         let sol = 20_000_000u128 * 9_999_990_000 / 100_000_000;
         // Debt: 1,000 + the full 10 interest, rounded up.
@@ -649,7 +741,7 @@ mod tests {
             kinds,
             [
                 (Kind::Escrow, 250_000_000),
-                (Kind::LoanReceivable, 1_002_500_000),
+                (Kind::LoanReceivable, 1_002_250_000),
                 (Kind::PledgedCollateral, 20_000_000),
                 (Kind::BorrowDebt, 1_010_000_000),
             ]
@@ -664,7 +756,7 @@ mod tests {
         // Repaid 400: 600 outstanding; the paid 400 sits in escrow.
         lent.repaid_principal = 400_000_000;
         let v = value(accounts(&lent, &loan(false))).unwrap();
-        assert_eq!(v.components[1].amount, 602_500_000);
+        assert_eq!(v.components[1].amount, 602_250_000);
         let mut borrowed = loan(false);
         // A paydown releases collateral pro rata to the booked debt, floored.
         borrowed.repaid_principal = 505_000_000;
@@ -690,15 +782,13 @@ mod tests {
     }
 
     #[test]
-    fn overdue_extended_and_unknown_loans_never_become_zero() {
+    fn overdue_and_unknown_loans_never_become_zero() {
         for (mutate, side) in [
             (
                 (|l: &mut Loan| l.expired_at = NOW as u64 - 1) as fn(&mut Loan),
                 true,
             ),
             (|l: &mut Loan| l.expired_at = NOW as u64 - 1, false),
-            (|l: &mut Loan| l.extension_count = 1, true),
-            (|l: &mut Loan| l.extension_count = 1, false),
             (|l: &mut Loan| l.duration = 0, true),
             (|l: &mut Loan| l.loan_type = LoanType::Leverage, true),
             (
@@ -771,5 +861,58 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    fn replace(
+        mut accounts: Vec<(Address, Option<Account>)>,
+        key: Address,
+        account: Option<Account>,
+    ) -> Vec<(Address, Option<Account>)> {
+        accounts.retain(|(k, _)| *k != key);
+        accounts.push((key, account));
+        accounts
+    }
+
+    fn receivable(accounts: Vec<(Address, Option<Account>)>) -> Result<u64> {
+        let v = value(accounts)?;
+        Ok(v.components
+            .iter()
+            .find(|c| c.kind == Kind::LoanReceivable)
+            .unwrap()
+            .amount)
+    }
+
+    #[test]
+    fn the_repay_fee_comes_from_the_fee_profile_or_the_config() {
+        let base = accounts(&loan(true), &loan(false));
+        // Config's 10% of the 2.5 accrued: 2.25 net.
+        assert_eq!(receivable(base.clone()), Ok(1_002_250_000));
+        // A fee profile on the vault's own User wins, even at zero.
+        let user_key = derive_user(&derive_vault_authority(&VAULT));
+        let own = replace(base.clone(), user_key, custom_fee_user(1, 1, Some(0)));
+        assert_eq!(receivable(own), Ok(1_002_500_000));
+        let own = replace(base.clone(), user_key, custom_fee_user(1, 1, Some(2_000)));
+        assert_eq!(receivable(own), Ok(1_002_000_000));
+        // The fee rounds up: 10% of 1 raw unit of interest is a whole unit.
+        let mut dust = loan(true);
+        dust.interest = 4;
+        assert_eq!(receivable(accounts(&dust, &loan(false))), Ok(1_000_000_000));
+        // Without Config the fee is unknown: fail closed.
+        let gone = replace(base, derive_config(), None);
+        assert!(matches!(value(gone), Err(Error::Missing { .. })));
+    }
+
+    #[test]
+    fn an_extended_loan_accrues_only_its_current_period() {
+        // Rolled 25 s ago into a fresh 100 s period; created long before.
+        let mut lent = loan(true);
+        lent.extension_count = 3;
+        lent.created_at = NOW as u64 - 10_000;
+        let mut borrowed = loan(false);
+        borrowed.extension_count = 1;
+        let v = value(accounts(&lent, &borrowed)).unwrap();
+        let unextended = value(accounts(&loan(true), &loan(false))).unwrap();
+        assert_eq!(v.value, unextended.value);
+        assert_eq!(v.components[1].amount, 1_002_250_000);
     }
 }

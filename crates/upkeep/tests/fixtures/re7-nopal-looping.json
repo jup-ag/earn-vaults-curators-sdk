@@ -1,16 +1,16 @@
 {
  "name": "re7-nopal-looping",
  "vault": "9EdtkcPbuM8zsyhknzo2CRLyPVXNJXCt6zgSjviMYCNc",
- "slot": 473623184,
+ "slot": 473636781,
  "expected": {
   "offerbook": {
    "slot": 0,
+   "sdk": 52876301475,
    "onchain_mark": 53003718353,
-   "onchain_mark_age_seconds": 55689,
+   "onchain_mark_age_seconds": 58604,
    "curator_api_if_extended_allowed": 52876301473,
    "mm_borrowing": 52876301474,
-   "mm_managed": 0,
-   "sdk_if_extended_allowed": 52876301475
+   "mm_managed": 0
   }
  },
  "lent": [],
@@ -36,7 +36,7 @@
   },
   {
    "account": {
-    "data": "AQAAAJj+huiNm+Lqi8HMpIeLKYjCQPUrhCS/tA7Rot3LXhmbfspMBDZ8IAAGAQEAAABicKqKWcWUBbRShshncubNEm6bil06OFNtN/e0FOi2Zw==",
+    "data": "AQAAAJj+huiNm+Lqi8HMpIeLKYjCQPUrhCS/tA7Rot3LXhmb7ApBVglNIAAGAQEAAABicKqKWcWUBbRShshncubNEm6bil06OFNtN/e0FOi2Zw==",
     "owner": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
    },
    "address": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
@@ -50,7 +50,7 @@
   },
   {
    "account": {
-    "data": "kOo6HAAAAAAS7gVrAAAAAEgEAAAAAAAASQQAAAAAAAD3bAZrAAAAAA==",
+    "data": "rR87HAAAAAAS7gVrAAAAAEgEAAAAAAAASQQAAAAAAABaeAZrAAAAAA==",
     "owner": "Sysvar1111111111111111111111111111111111111"
    },
    "address": "SysvarC1ock11111111111111111111111111111111"
@@ -61,14 +61,14 @@
   },
   {
    "account": {
-    "data": "h8dSEPmDtvHG+nrzvtutOj1l82qryXQxsbvkwtL24OR8pgIDRS9dYXl8szytbAyAc7IdpMQ3ZAWF7Tn2sEZyyHpR1gWMtyb6AgAGSaJkbJuRq/cvVvsHRwHJwyp3lX50EzExEKvsHW7PCIA4TxeI9AAAAKTmfVj5AAAA7mwGawAAAAACERPvP3H/BclenozhcxbxUXvL+eHEhCG764X4ME0EGPeA4oganO3BaPj9y3TzLqfiwk9dDCxaIuRcmdJ+MiQS/w==",
+    "data": "h8dSEPmDtvHG+nrzvtutOj1l82qryXQxsbvkwtL24OR8pgIDRS9dYXl8szytbAyAc7IdpMQ3ZAWF7Tn2sEZyyHpR1gWMtyb6AgAGSaJkbJuRq/cvVvsHRwHJwyp3lX50EzExEKvsHW7PCIB081WI9AAAACKuwVj5AAAAIXgGawAAAAACERPvP3H/BclenozhcxbxUXvL+eHEhCG764X4ME0EGPeA4oganO3BaPj9y3TzLqfiwk9dDCxaIuRcmdJ+MiQS/w==",
     "owner": "jup3YeL8QhtSx1e253b2FDvsMNC87fDrgQZivbrndc9"
    },
    "address": "2vVYHYM8VYnvZqQWpTJSj8o8DBf1wM8pVs3bsTgYZiqJ"
   },
   {
    "account": {
-    "data": "AQAAAEcn8RD5rZyCj3b2Rq49ZiVsmScRvvn3bU9qhBHACBPVi+RCYcGCAQAGAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+    "data": "AQAAAEcn8RD5rZyCj3b2Rq49ZiVsmScRvvn3bU9qhBHACBPVCh3AdnaCAQAGAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
     "owner": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
    },
    "address": "9BEcn9aPEmhSPbPQeFGjidRiEKki46fVQDyPpSQXPA2D"
