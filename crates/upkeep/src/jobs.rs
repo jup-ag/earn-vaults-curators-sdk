@@ -256,8 +256,12 @@ pub fn crystallize(keys: &VaultKeys, prior: Vec<Instruction>, payer: Address) ->
 /// subscriptions are paused, on a zero fee-net AUM, or when both recipients'
 /// fee shares round to zero (`FeeAmountTooSmall`), so each of those returns
 /// `false`. This replays the program's fold and share conversion on a copy
-/// of the vault. shortcut: against the stored AUM, so a fee within a share or
-/// two of rounding to zero can still flip once `ValidateAum` restates AUM.
+/// of the vault, against the stored AUM. The `ValidateAum` ahead of the fill
+/// restates AUM and can change the answer either way: a dust fee that grows
+/// above the high-water mark, or a fee that falls back to dust. Only that
+/// post-validation state settles it, so simulate the list before sending and
+/// rebuild with the other choice when the simulation fails with
+/// `FeeAmountTooSmall` (drop `CrystallizeFees`) or `FeeDebtAboveCap` (add it).
 pub fn crystallize_before_fill(vault_data: &[u8], share_supply: u64, now: i64) -> Result<bool> {
     let mut data = vault_data.to_vec();
     let vault = Vault::read_mut(&mut data).map_err(|_| Error::Job("not a vault account"))?;
