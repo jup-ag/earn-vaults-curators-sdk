@@ -8,4 +8,5 @@ Synced with earn vault program 0.2.0 at commit
 - [Changelog](CHANGELOG.md)
 - [CLI usage](crates/cli/README.md)
 - [Offerbook client](crates/offerbook-client/README.md)
+- [Upkeep: position valuations and keeper job builders](crates/upkeep/README.md)
 - [Compatibility and upgrade notes](docs/compatibility.md)
