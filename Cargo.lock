@@ -693,6 +693,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "earn-vaults-upkeep"
+version = "0.2.0"
+dependencies = [
+ "base64",
+ "earn-vaults-sdk",
+ "offerbook-client",
+ "serde_json",
+ "solana-address",
+ "solana-instruction 3.5.1",
+ "thiserror",
+]
+
+[[package]]
 name = "ed25519"
 version = "2.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

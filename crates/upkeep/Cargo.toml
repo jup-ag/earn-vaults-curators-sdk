@@ -1,0 +1,22 @@
+[package]
+name = "earn-vaults-upkeep"
+version.workspace = true
+edition.workspace = true
+description = "Pure position valuations and upkeep instruction lists for earn vault keepers"
+
+[lints]
+workspace = true
+
+[dependencies]
+earn-vaults-sdk.workspace = true
+offerbook-client = { path = "../offerbook-client" }
+solana-address.workspace = true
+solana-instruction.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+base64.workspace = true
+serde_json.workspace = true
+
+[lib]
+doctest = false
