@@ -5,18 +5,21 @@
 //! fetches them with one `getMultipleAccounts` at one slot, wraps the result in a
 //! [`Snapshot`] (which must include the clock sysvar), and gets back the value
 //! `PriceOpaqueArgs.value` takes: numéraire micro-units, `u64`, with every input
-//! it used.
+//! it used. When the same transaction refreshes prices, value against
+//! [`Snapshot::with_refresh`], so the mark uses the prices the refresh installs.
 //!
 //! Rules every valuation keeps:
 //! - **Fail closed.** A key the snapshot never fetched, a missing account that
-//!   must exist, a wrong owner or layout, a stale or out-of-band price, or an
-//!   overdue Offerbook loan is an [`Error`], never a zero.
+//!   must exist, a wrong owner or layout, a stale or out-of-band price, an
+//!   overdue Offerbook loan, or a holding with no priced row is an [`Error`],
+//!   never a zero.
 //! - **Round against the vault.** Assets are struck at price − confidence and
 //!   rounded down; liabilities at price + confidence and rounded up. This is
 //!   the vault program's own band (`Floor` for holdings, `Ceil` for payouts).
 //! - **Checked arithmetic.** An overflow is [`Error::Overflow`], never a wrap.
-//! - **No first zero mark.** [`mark::MarkDecision`] refuses to post a zero
-//!   bootstrap mark: from zero, the drift guard can reach nothing but zero.
+//! - **Only marks the program accepts.** [`mark::SlotState::decide`] builds no
+//!   mark outside the slot's drift budget, and no zero first mark while the
+//!   vault is in bootstrap.
 //!
 //! [`jobs`] turns marks into instruction lists in the order program 0.2.0
 //! requires. Lists, never transactions: every signer mode wraps the same list.
@@ -26,6 +29,7 @@ pub mod jobs;
 pub mod mark;
 pub mod offerbook;
 pub mod price;
+pub mod rows;
 pub mod snapshot;
 
 pub use snapshot::{Account, Snapshot};
@@ -74,7 +78,7 @@ pub enum Error {
     #[error("{mint} is not a configured asset row, so it has no price")]
     Unpriced { mint: Address },
     #[error("Offerbook loan {loan} cannot be valued: {reason}")]
-    Loan { loan: Address, reason: &'static str },
+    Loan { loan: Address, reason: LoanFault },
     /// The Offerbook `User` counts loans the plan does not know about.
     #[error("Offerbook loans changed since discovery; discover them again")]
     LoansChanged,
@@ -82,6 +86,10 @@ pub enum Error {
     Negative { shortfall: u64 },
     #[error("arithmetic overflow while valuing {0}")]
     Overflow(&'static str),
+    /// The caller's reads came in an order that cannot prove the result.
+    #[error("reads out of order: {0}")]
+    ReadOrder(&'static str),
+    /// The caller's input to a plan or job is inconsistent.
     #[error("invalid job: {0}")]
     Job(&'static str),
 }
@@ -107,6 +115,40 @@ impl core::fmt::Display for PriceFault {
             Self::Future => "price is published in the future",
             Self::Confidence => "confidence band is too wide",
             Self::NoFloor => "price minus confidence is not positive",
+        })
+    }
+}
+
+/// Why an Offerbook loan cannot be valued. [`Self::PastDue`] is the one a
+/// keeper acts on: the loan is claimable (as lender) or must be repaid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoanFault {
+    /// At or past `expired_at`, when Offerbook refuses repayment and allows a claim.
+    PastDue,
+    NotClassic,
+    ZeroDuration,
+    /// The vault is not the lender (or borrower) the plan says it is.
+    WrongSide,
+    OverRepaid,
+    ExpiryOutOfRange,
+    PrincipalNotToken,
+    CollateralNotToken,
+    /// The loan vault holds less collateral than the loan locks.
+    CollateralShort,
+}
+
+impl core::fmt::Display for LoanFault {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::PastDue => "past due",
+            Self::NotClassic => "only classic loans are supported",
+            Self::ZeroDuration => "zero duration",
+            Self::WrongSide => "the vault is not the loan's planned side",
+            Self::OverRepaid => "repaid principal exceeds principal",
+            Self::ExpiryOutOfRange => "expiry out of range",
+            Self::PrincipalNotToken => "principal is not a token",
+            Self::CollateralNotToken => "collateral is not a token",
+            Self::CollateralShort => "loan vault holds less than the locked collateral",
         })
     }
 }

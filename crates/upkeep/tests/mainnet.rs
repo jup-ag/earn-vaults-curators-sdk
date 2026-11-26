@@ -7,10 +7,10 @@ use {
     base64::{Engine, engine::general_purpose::STANDARD},
     earn_vaults_upkeep::{
         Account, Error, PriceFault, Snapshot,
-        earn::{EarnPlan, EarnScope},
+        earn::{EarnPlan, EarnScope, Market},
         jobs::{VaultKeys, attest},
-        mark::{Mark, MarkDecision},
-        offerbook::OfferbookPlan,
+        mark::{Grant, MarkDecision},
+        offerbook::{Kind, LoanScan, OfferbookPlan},
         snapshot::CLOCK_SYSVAR_ID,
     },
     serde_json::Value,
@@ -65,16 +65,15 @@ impl Fixture {
     }
 
     fn offerbook(&self) -> OfferbookPlan {
-        // The fixture's counters equal the loan list's, so its one slot stands
-        // in for a read taken before the scans.
-        OfferbookPlan::new(
-            self.vault,
-            &self.snapshot(),
-            self.slot,
-            self.lent.clone(),
-            self.borrowed.clone(),
-        )
-        .unwrap()
+        // The scans ran just before the read and the fixture's counters equal
+        // the loan list's, so its one slot stands in for both sides of them.
+        let scan = LoanScan {
+            lent: self.lent.clone(),
+            borrowed: self.borrowed.clone(),
+            first_slot: self.slot,
+            last_slot: self.slot,
+        };
+        OfferbookPlan::new(self.vault, &self.snapshot(), scan).unwrap()
     }
 
     /// Every key a plan names was fetched, so one read covers it.
@@ -118,31 +117,27 @@ fn juplend_optimizer_earn_equals_the_optimizer_and_the_chain() {
     assert_eq!(earn.value, f.expect("earn", "onchain_mark"));
     assert_eq!(earn.markets.len(), 5);
     assert!(
-        OfferbookPlan::new(f.vault, &snapshot, f.slot, [], []).is_err(),
+        OfferbookPlan::new(f.vault, &snapshot, LoanScan::default()).is_err(),
         "no Offerbook slot"
     );
 
-    // refresh → mark → ValidateAum with every priced row's custody in order.
-    let MarkDecision::Post { value, bootstrap } = earn.slot.decide(earn.value) else {
-        panic!("an initialized slot is always marked");
-    };
+    // mark → ValidateAum with every priced row's custody in order.
+    let signer = Address::new_from_array([1; 32]);
+    let mark = earn
+        .slot
+        .decide(earn.value, earn.now)
+        .mark(signer, Grant::JupiterLend)
+        .expect("equal to the last mark, so inside any drift budget");
+    assert!(!mark.bootstrap);
     let state = snapshot.vault(&f.vault).unwrap();
     let keys = VaultKeys::new(f.vault, state, &plan.rows).unwrap();
     assert_eq!(keys.custody.len(), 5);
-    for (_, _, custody) in &keys.custody {
+    for custody in &keys.custody {
         assert!(
-            snapshot.get(custody).unwrap().is_some(),
+            snapshot.get(&custody.account).unwrap().is_some(),
             "custody ATA exists"
         );
     }
-    let signer = Address::new_from_array([1; 32]);
-    let mark = Mark {
-        signer,
-        slot: earn.slot.index,
-        value,
-        bootstrap,
-        earn_scoped: true,
-    };
     let ixs = attest(&keys, vec![], &[mark]).unwrap();
     assert_eq!(ixs.len(), 2);
     assert_eq!(ixs[1], keys.validate_aum());
@@ -171,10 +166,30 @@ fn susdai_yield_matches_the_existing_copies_and_the_chain() {
     let book = plan.value(&snapshot).unwrap();
     assert_eq!(book.value, f.expect("offerbook", "sdk"));
     // The market maker's managed mark counts escrow yield too, but no repay
-    // fee; the API and the borrowing path leave the jlUSDC out.
-    assert!(book.value < f.expect("offerbook", "mm_managed"));
-    assert!(book.value > f.expect("offerbook", "curator_api"));
+    // fee; the API and the borrowing path leave the jlUSDC out. The gap
+    // between those two is the escrow yield, give or take its price.
+    let managed = f.expect("offerbook", "mm_managed");
+    let api = f.expect("offerbook", "curator_api");
+    let escrow_yield: u64 = book
+        .components
+        .iter()
+        .filter(|c| c.kind == Kind::EscrowYield)
+        .map(|c| c.amount)
+        .sum();
+    assert!(
+        bps(managed - api, escrow_yield) < 5.0,
+        "{managed} {api} {escrow_yield}"
+    );
+    // Below the managed mark by the repay fee alone: well under 1 bp.
+    assert!(book.value < managed && bps(book.value, managed) < 1.0);
     assert!(bps(book.value, f.expect("offerbook", "onchain_mark")) < 1.0);
+    assert!(matches!(
+        book.slot.decide(book.value, book.now),
+        MarkDecision::Post {
+            bootstrap: false,
+            ..
+        }
+    ));
     assert_eq!(book.liabilities, 0);
     assert_eq!(
         book.repay_fee_bps,
@@ -201,6 +216,16 @@ fn re7_lending_values_extended_loans_by_their_current_period() {
     let other = f.expect("offerbook", "curator_api_if_extended_allowed");
     assert_eq!(other, f.expect("offerbook", "mm_borrowing"));
     assert!(other > book.value);
+    // Its on-chain mark is 16 h old, so no parity there; the move to this
+    // value is 3 bps, inside the slot's drift budget.
+    assert!(bps(book.value, f.expect("offerbook", "onchain_mark")) < 5.0);
+    assert!(matches!(
+        book.slot.decide(book.value, book.now),
+        MarkDecision::Post {
+            bootstrap: false,
+            ..
+        }
+    ));
 
     // Its Earn slot holds nothing: zero, and since it was marked before, a
     // zero mark is posted rather than skipped.
@@ -215,9 +240,10 @@ fn re7_lending_values_extended_loans_by_their_current_period() {
     let no_market = plan
         .rows
         .iter()
-        .find(|r| snapshot.get(&r.market.lending).unwrap().is_none())
+        .map(Market::of)
+        .find(|m| snapshot.get(&m.lending).unwrap().is_none())
         .unwrap();
-    let receipt = no_market.market.receipt_account(&plan.authority);
+    let receipt = no_market.receipt_account(&plan.authority);
     let mut accounts = f.accounts.clone();
     accounts.retain(|(k, _)| *k != receipt);
     accounts.push((
@@ -231,11 +257,15 @@ fn re7_lending_values_extended_loans_by_their_current_period() {
         .value(&Snapshot::new(f.slot, accounts).unwrap())
         .unwrap();
     assert_eq!(griefed.value, earn.value);
+    // Its last mark is 1 micro-unit. 2% of 1 rounds to nothing, so the only
+    // value the program accepts is 1 again: no mark is built for 0.
+    assert_eq!(f.expect("earn", "onchain_mark"), 1);
     assert_eq!(
-        earn.slot.decide(earn.value),
-        MarkDecision::Post {
-            value: 0,
-            bootstrap: false
+        earn.slot.decide(earn.value, earn.now),
+        MarkDecision::OutOfBudget {
+            slot: earn.slot.index,
+            target: 0,
+            nearest: 1
         }
     );
 }
@@ -259,6 +289,22 @@ fn re7_looping_nets_collateral_against_full_debt() {
     assert_eq!(book.liabilities, 157_788_279_244);
     assert_eq!(book.value, book.assets - book.liabilities);
     assert_eq!(book.repay_fee_bps, None, "a borrower pays no repay fee");
+    // Its on-chain mark is 16 h old and 24 bps higher; the slot's 10 bps cap
+    // allows one window's move, so the keeper is told, not handed a mark the
+    // program refuses.
+    let last = f.expect("offerbook", "onchain_mark");
+    let MarkDecision::OutOfBudget {
+        target, nearest, ..
+    } = book.slot.decide(book.value, book.now)
+    else {
+        panic!("a 24 bps move is outside a 10 bps budget");
+    };
+    assert_eq!(target, book.value);
+    assert!(nearest > target && nearest < last);
+    assert!(
+        (bps(nearest, last) - 10.0).abs() < 0.01,
+        "one window: 10 bps"
+    );
 }
 
 #[test]
@@ -285,7 +331,7 @@ fn a_stale_clock_or_tampered_account_never_values() {
         Err(Error::WrongOwner { .. })
     ));
     // A Lending account that is missing, or of another layout.
-    let lending = plan.rows[0].market.lending;
+    let lending = Market::of(&plan.rows[0]).lending;
     let short = f.with(&lending, |a| a.data.truncate(100));
     assert!(matches!(plan.value(&short), Err(Error::Layout { .. })));
     let unfetched = Snapshot::new(
@@ -295,7 +341,7 @@ fn a_stale_clock_or_tampered_account_never_values() {
     .unwrap();
     assert_eq!(plan.value(&unfetched), Err(Error::NotFetched(lending)));
     // A receipt account that belongs to someone else.
-    let receipt = plan.rows[0].market.receipt_account(&plan.authority);
+    let receipt = Market::of(&plan.rows[0]).receipt_account(&plan.authority);
     let stolen = f.with(&receipt, |a| a.data[32..64].copy_from_slice(&[9; 32]));
     assert!(matches!(plan.value(&stolen), Err(Error::Layout { .. })));
 }
@@ -304,7 +350,7 @@ fn a_stale_clock_or_tampered_account_never_values() {
 fn earn_rejects_a_zero_exchange_price() {
     let f = load("bitwise-juplend-optimizer");
     let plan = EarnPlan::new(f.vault, &f.snapshot(), EarnScope::LenderOnly).unwrap();
-    let lending = plan.rows[0].market.lending;
+    let lending = Market::of(&plan.rows[0]).lending;
     // Receipts × 0 would read as a silent zero; it must be an error.
     let zero_price = f.with(&lending, |a| {
         a.data[115..123].copy_from_slice(&0u64.to_le_bytes())

@@ -21,17 +21,24 @@
 //! only the period it is in; the borrower paid the earlier ones at extension.
 //! Overdue loans, and any mint without a row, fail closed.
 //!
+//! A lent loan's collateral mint must be a priced row too, active or not: a
+//! claim moves that collateral into the escrow, where only row mints are read.
+//!
 //! Loans are found with `getProgramAccounts` ([`loan_filters`]), outside the
-//! one-slot read. The `User`'s loan counters bind the two: a loan created after
-//! discovery changes them, and [`OfferbookPlan::value`] refuses with
-//! [`Error::LoansChanged`].
+//! one-slot read, and the reads are ordered so the scans prove the loan list:
+//! the discovery read (with the `User` loan counters) comes before the scans,
+//! and the valuation read after them. A loan created after discovery moves the
+//! counters, and [`OfferbookPlan::value`] refuses with [`Error::LoansChanged`].
+//! A loan that settled before the scans is excluded by them and settled at the
+//! valuation slot too.
 
 use {
     crate::{
-        Error, Result,
-        earn::{PlannedRow, Receipts, check_rows, in_bootstrap, planned_rows},
-        mark::{SlotState, find_slot},
+        Error, LoanFault, Result,
+        earn::{Market, Receipts},
+        mark::{SlotState, find_slot, slot_state},
         price::{RowPrice, Side, gate},
+        rows::{self, AssetRow},
         snapshot::{CLOCK_SYSVAR_ID, Snapshot, owned_by, token_balance},
     },
     earn_vaults_sdk::{
@@ -52,11 +59,23 @@ pub const LOAN_STATUS_OFFSET: usize = 136;
 /// `LoanStatus::Active` on the wire.
 pub const LOAN_STATUS_ACTIVE: u8 = 0;
 
-/// `getProgramAccounts` memcmp filters, as `(offset, bytes)`, for the active
-/// loans the vault lent and the active loans it borrowed. Status is terminal
-/// once a loan leaves `Active`, so a loan inactive at discovery never needs
-/// valuing; a loan created after discovery moves the `User` counters.
-pub fn loan_filters(vault: &Address) -> [[(usize, Vec<u8>); 3]; 2] {
+/// One `getProgramAccounts` memcmp filter set, as `(offset, bytes)`.
+pub type LoanFilter = [(usize, Vec<u8>); 3];
+
+/// The memcmp filters for the vault's active loans.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoanFilters {
+    /// Active loans the vault lent.
+    pub lent: LoanFilter,
+    /// Active loans the vault borrowed.
+    pub borrowed: LoanFilter,
+}
+
+/// `getProgramAccounts` filters for the active loans the vault lent and
+/// borrowed. Status is terminal once a loan leaves `Active`, so a loan
+/// inactive at the scan never needs valuing; a loan created after discovery
+/// moves the `User` counters.
+pub fn loan_filters(vault: &Address) -> LoanFilters {
     let authority = derive_vault_authority(vault).to_bytes().to_vec();
     let filter = |offset| {
         [
@@ -65,14 +84,28 @@ pub fn loan_filters(vault: &Address) -> [[(usize, Vec<u8>); 3]; 2] {
             (LOAN_STATUS_OFFSET, vec![LOAN_STATUS_ACTIVE]),
         ]
     };
-    [filter(LOAN_LENDER_OFFSET), filter(LOAN_BORROWER_OFFSET)]
+    LoanFilters {
+        lent: filter(LOAN_LENDER_OFFSET),
+        borrowed: filter(LOAN_BORROWER_OFFSET),
+    }
 }
 
-/// The vault's Offerbook `User`, and the configured row mints; fetch these with
-/// the vault and pass the result to [`OfferbookPlan::new`].
+/// What the two [`loan_filters`] scans returned, with their context slots.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LoanScan {
+    pub lent: Vec<Address>,
+    pub borrowed: Vec<Address>,
+    /// The earlier of the two scans' context slots.
+    pub first_slot: u64,
+    /// The later of the two.
+    pub last_slot: u64,
+}
+
+/// The vault's Offerbook `User`, plus [`rows::discovery_keys`]; fetch these
+/// before the loan scans and pass the result to [`OfferbookPlan::new`].
 pub fn discovery_keys(vault_key: &Address, vault: &Vault) -> Vec<Address> {
-    let mut keys = vec![*vault_key, derive_user(&derive_vault_authority(vault_key))];
-    keys.extend(crate::earn::discovery_keys(vault));
+    let mut keys = rows::discovery_keys(vault_key, vault);
+    keys.push(derive_user(&derive_vault_authority(vault_key)));
     keys
 }
 
@@ -82,31 +115,26 @@ pub struct OfferbookPlan {
     pub authority: Address,
     pub user: Address,
     pub slot: u8,
-    pub rows: Vec<PlannedRow>,
-    /// Active loans the vault lent, then borrowed, at discovery.
+    pub rows: Vec<AssetRow>,
+    /// Active loans the vault lent, then borrowed, at the scans.
     pub lent: Vec<Address>,
     pub borrowed: Vec<Address>,
     /// `User.total_lender_loans` and `total_borrower_loans` at discovery.
     pub loan_counters: (u64, u64),
+    /// The later scan's slot: a valuation must be read at or after it.
+    pub scanned_at: u64,
 }
 
 impl OfferbookPlan {
     /// `snapshot` holds [`discovery_keys`] and must be read **before** the
-    /// [`loan_filters`] scans that produced `lent` and `borrowed`;
-    /// `scans_slot` is the earliest context slot of those scans. Its `User`
-    /// counters are then no newer than the loan list, so a loan created
-    /// in between moves the counters and [`Self::value`] refuses until the
-    /// next discovery. Read after the scans, the counters would already count
-    /// a loan the list lacks, and the omission would never be seen.
-    pub fn new(
-        vault: Address,
-        snapshot: &Snapshot,
-        scans_slot: u64,
-        lent: impl IntoIterator<Item = Address>,
-        borrowed: impl IntoIterator<Item = Address>,
-    ) -> Result<Self> {
-        if snapshot.slot() > scans_slot {
-            return Err(Error::Job(
+    /// [`loan_filters`] scans that produced `scan`. Its `User` counters are
+    /// then no newer than the loan list, so a loan created in between moves
+    /// the counters and [`Self::value`] refuses until the next discovery.
+    /// Read after the scans, the counters would already count a loan the list
+    /// lacks, and the omission would never be seen.
+    pub fn new(vault: Address, snapshot: &Snapshot, scan: LoanScan) -> Result<Self> {
+        if snapshot.slot() > scan.first_slot || scan.first_slot > scan.last_slot {
+            return Err(Error::ReadOrder(
                 "read the discovery snapshot before the loan scans",
             ));
         }
@@ -114,14 +142,16 @@ impl OfferbookPlan {
         let (slot, _) = offerbook_slot(state)?;
         let authority = derive_vault_authority(&vault);
         let user = derive_user(&authority);
-        let sorted = |loans: &mut Vec<Address>| {
+        let LoanScan {
+            mut lent,
+            mut borrowed,
+            last_slot,
+            ..
+        } = scan;
+        for loans in [&mut lent, &mut borrowed] {
             loans.sort();
             loans.dedup();
-        };
-        let (mut lent, mut borrowed): (Vec<_>, Vec<_>) =
-            (lent.into_iter().collect(), borrowed.into_iter().collect());
-        sorted(&mut lent);
-        sorted(&mut borrowed);
+        }
         if lent.iter().any(|l| borrowed.contains(l)) {
             return Err(Error::Job("a loan cannot be both lent and borrowed"));
         }
@@ -130,15 +160,16 @@ impl OfferbookPlan {
             authority,
             user,
             slot,
-            rows: planned_rows(snapshot, state)?,
+            rows: rows::read(snapshot, state)?,
             loan_counters: counters(read_user(snapshot, &user, &authority)?.as_ref()),
             lent,
             borrowed,
+            scanned_at: last_slot,
         })
     }
 
-    pub fn escrow_account(&self, row: &PlannedRow) -> Address {
-        derive_associated_token_account(&self.user, &row.market.mint, &row.market.token_program)
+    pub fn escrow_account(&self, row: &AssetRow) -> Address {
+        derive_associated_token_account(&self.user, &row.mint, &row.token_program)
     }
 
     /// Every account [`Self::value`] reads, for one `getMultipleAccounts`.
@@ -150,9 +181,9 @@ impl OfferbookPlan {
             self.user,
         ];
         for row in &self.rows {
-            keys.push(row.market.mint);
+            keys.push(row.mint);
             keys.push(self.escrow_account(row));
-            keys.extend(row.market.keys(&self.user));
+            keys.extend(Market::of(row).keys(&self.user));
         }
         if !self.lent.is_empty() {
             // Its repay fee comes out of the interest the vault earns as lender.
@@ -167,13 +198,18 @@ impl OfferbookPlan {
     }
 
     pub fn value(&self, snapshot: &Snapshot) -> Result<OfferbookValuation> {
+        if snapshot.slot() < self.scanned_at {
+            // A loan that settled after this slot but before the scans is
+            // missing from the plan and still active here.
+            return Err(Error::ReadOrder("read the valuation after the loan scans"));
+        }
         let now = snapshot.now()?;
         let vault = snapshot.vault(&self.vault)?;
-        let (slot, position) = offerbook_slot(vault)?;
+        let (slot, _) = offerbook_slot(vault)?;
         if slot != self.slot {
             return Err(Error::PlanStale("Offerbook slot"));
         }
-        check_rows(snapshot, vault, &self.rows)?;
+        rows::check(snapshot, vault, &self.rows)?;
         let user = read_user(snapshot, &self.user, &self.authority)?;
         if counters(user.as_ref()) != self.loan_counters {
             return Err(Error::LoansChanged);
@@ -184,16 +220,10 @@ impl OfferbookPlan {
         let mut components = Vec::new();
         for row in &self.rows {
             let escrow = self.escrow_account(row);
-            let cash = token_balance(
-                snapshot,
-                &escrow,
-                &row.market.mint,
-                &self.user,
-                "Offerbook escrow",
-            )?;
+            let cash = token_balance(snapshot, &escrow, &row.mint, &self.user, "Offerbook escrow")?;
             components.push(Component {
                 kind: Kind::Escrow,
-                mint: row.market.mint,
+                mint: row.mint,
                 account: escrow,
                 amount: cash,
                 side: Side::Asset,
@@ -202,11 +232,11 @@ impl OfferbookPlan {
                 receipt_account,
                 underlying,
                 ..
-            }) = row.market.redeemable(snapshot, &self.user, row.decimals)?
+            }) = Market::of(row).redeemable(snapshot, &self.user, row.decimals)?
             {
                 components.push(Component {
                     kind: Kind::EscrowYield,
-                    mint: row.market.mint,
+                    mint: row.mint,
                     account: receipt_account,
                     amount: underlying,
                     side: Side::Asset,
@@ -216,14 +246,15 @@ impl OfferbookPlan {
         let mut expires_at = None::<i64>;
         let loans = self.lent.iter().map(|k| (k, true));
         for (key, lent) in loans.chain(self.borrowed.iter().map(|k| (k, false))) {
-            let Some(loan) = self.loan(snapshot, key, lent, now)? else {
+            let Some(loan) = self.loan(snapshot, vault, key, lent, now)? else {
                 continue;
             };
-            let expiry = i64::try_from(loan.expired_at).map_err(|_| Error::Loan {
+            // Due, and so unvaluable, from `expired_at` on.
+            let last_second = i64::try_from(loan.expired_at - 1).map_err(|_| Error::Loan {
                 loan: *key,
-                reason: "expiry out of range",
+                reason: LoanFault::ExpiryOutOfRange,
             })?;
-            expires_at = Some(expires_at.map_or(expiry, |e| e.min(expiry)));
+            expires_at = Some(expires_at.map_or(last_second, |e| e.min(last_second)));
             let fee_bps = if lent {
                 match repay_fee_bps {
                     Some(bps) => bps,
@@ -238,28 +269,22 @@ impl OfferbookPlan {
         }
         components.retain(|c| c.amount != 0);
 
-        let mut sums = BTreeMap::<(Address, bool), u128>::new();
+        let mut sums = BTreeMap::<(Address, Side), u128>::new();
         for c in &components {
-            let entry = sums.entry((c.mint, c.side == Side::Liability)).or_default();
+            let entry = sums.entry((c.mint, c.side)).or_default();
             *entry = entry
                 .checked_add(u128::from(c.amount))
                 .ok_or(Error::Overflow("Offerbook holdings"))?;
         }
         let mut totals = Vec::new();
         let (mut assets, mut liabilities) = (0u64, 0u64);
-        for ((mint, liability), amount) in sums {
+        for ((mint, side), amount) in sums {
             let (row, asset) = crate::price::row(vault, &mint).ok_or(Error::Unpriced { mint })?;
             let price = gate(row, asset, now)?;
-            let side = if liability {
-                Side::Liability
-            } else {
-                Side::Asset
-            };
             let value = price.value(amount, side)?;
-            let total = if liability {
-                &mut liabilities
-            } else {
-                &mut assets
+            let total = match side {
+                Side::Liability => &mut liabilities,
+                Side::Asset => &mut assets,
             };
             *total = total
                 .checked_add(value)
@@ -283,7 +308,7 @@ impl OfferbookPlan {
             .chain(expires_at)
             .min();
         Ok(OfferbookValuation {
-            slot: SlotState::of(slot, position, in_bootstrap(snapshot, &self.vault, vault)?),
+            slot: slot_state(snapshot, &self.vault, vault, slot)?,
             now,
             value,
             assets,
@@ -299,6 +324,7 @@ impl OfferbookPlan {
     fn loan(
         &self,
         snapshot: &Snapshot,
+        vault: &Vault,
         key: &Address,
         lent: bool,
         now: i64,
@@ -314,22 +340,36 @@ impl OfferbookPlan {
             reason: "not a Loan account",
         })?;
         if (loan.lender == self.authority) != lent || (loan.borrower == self.authority) == lent {
-            return Err(fail("the vault is not the loan's planned side"));
+            return Err(fail(LoanFault::WrongSide));
+        }
+        if lent {
+            // Claimed collateral lands in the escrow, which is read only for
+            // row mints: without a row it would vanish from the mark.
+            let Asset::Token(collateral) = &loan.collateral else {
+                return Err(fail(LoanFault::CollateralNotToken));
+            };
+            if crate::price::row(vault, &collateral.mint).is_none() {
+                return Err(Error::Unpriced {
+                    mint: collateral.mint,
+                });
+            }
         }
         if loan.status != LoanStatus::Active {
             return Ok(None);
         }
         if loan.loan_type != LoanType::Classic {
-            return Err(fail("only classic loans are supported"));
+            return Err(fail(LoanFault::NotClassic));
         }
         if loan.duration == 0 {
-            return Err(fail("zero duration"));
+            return Err(fail(LoanFault::ZeroDuration));
         }
-        if u64::try_from(now).map_or(true, |now| now > loan.expired_at) {
-            return Err(fail("past due"));
+        // Offerbook's `fail_if_due`: due at `expired_at`, when repayment is
+        // refused and the lender may claim.
+        if u64::try_from(now).map_or(true, |now| now >= loan.expired_at) {
+            return Err(fail(LoanFault::PastDue));
         }
         if loan.repaid_principal > loan.principal_amount {
-            return Err(fail("repaid principal exceeds principal"));
+            return Err(fail(LoanFault::OverRepaid));
         }
         Ok(Some(loan))
     }
@@ -344,7 +384,7 @@ impl OfferbookPlan {
     ) -> Result<Vec<Component>> {
         let fail = |reason| Error::Loan { loan: *key, reason };
         let Asset::Token(principal) = &loan.principal else {
-            return Err(fail("principal is not a token"));
+            return Err(fail(LoanFault::PrincipalNotToken));
         };
         let outstanding = u128::from(loan.principal_amount - loan.repaid_principal);
         if loan.lender == self.authority {
@@ -368,7 +408,7 @@ impl OfferbookPlan {
             }]);
         }
         let Asset::Token(collateral) = &loan.collateral else {
-            return Err(fail("collateral is not a token"));
+            return Err(fail(LoanFault::CollateralNotToken));
         };
         // Released collateral is the paid-down share of the booked debt,
         // floored; what is left sits in the loan vault.
@@ -392,7 +432,7 @@ impl OfferbookPlan {
         // Anyone can send tokens to the loan vault: count only what the loan
         // locks, and fail only when the vault holds less than that.
         if u128::from(held) < locked {
-            return Err(fail("loan vault holds less than the locked collateral"));
+            return Err(fail(LoanFault::CollateralShort));
         }
         Ok(vec![
             Component {
@@ -518,7 +558,7 @@ pub struct OfferbookValuation {
     pub liabilities: u64,
     pub components: Vec<Component>,
     pub totals: Vec<MintTotal>,
-    /// The earliest of every price's gate expiry and every active loan's due time.
+    /// The last second every price passes its gate and no active loan is due.
     pub valid_until: Option<i64>,
     /// The repay fee taken out of lent interest; `None` without active lent loans.
     pub repay_fee_bps: Option<u16>,
@@ -742,9 +782,19 @@ mod tests {
         accounts
     }
 
+    /// The scans of [`accounts`]' two loans, run at `first` and `last`.
+    fn scan(first: u64, last: u64) -> LoanScan {
+        LoanScan {
+            lent: vec![LENT],
+            borrowed: vec![BORROWED],
+            first_slot: first,
+            last_slot: last,
+        }
+    }
+
     fn value(accounts: Vec<(Address, Option<Account>)>) -> Result<OfferbookValuation> {
         let snapshot = Snapshot::new(1, accounts)?;
-        OfferbookPlan::new(VAULT, &snapshot, 1, [LENT], [BORROWED])?.value(&snapshot)
+        OfferbookPlan::new(VAULT, &snapshot, scan(1, 1))?.value(&snapshot)
     }
 
     #[test]
@@ -819,6 +869,8 @@ mod tests {
                 true,
             ),
             (|l: &mut Loan| l.expired_at = NOW as u64 - 1, false),
+            // Due at `expired_at` itself: Offerbook already refuses repayment.
+            (|l: &mut Loan| l.expired_at = NOW as u64, true),
             (|l: &mut Loan| l.duration = 0, true),
             (|l: &mut Loan| l.loan_type = LoanType::Leverage, true),
             (
@@ -839,6 +891,15 @@ mod tests {
             let result = value(accounts(&lent, &borrowed));
             assert!(result.is_err(), "{lent:?} {borrowed:?} gave {result:?}");
         }
+        let mut due = loan(true);
+        due.expired_at = NOW as u64;
+        assert_eq!(
+            value(accounts(&due, &loan(false))),
+            Err(Error::Loan {
+                loan: LENT,
+                reason: LoanFault::PastDue
+            })
+        );
         // Settled loans are not holdings.
         let mut repaid = loan(true);
         repaid.status = LoanStatus::Repaid;
@@ -847,22 +908,52 @@ mod tests {
     }
 
     #[test]
-    fn discovery_read_after_the_loan_scans_is_refused() {
+    fn a_lent_loan_against_unpriced_collateral_never_values() {
+        // A claim would move the collateral into an escrow no row reads, so
+        // the loan fails closed, active or already claimed.
+        let unlisted = Address::new_from_array([9; 32]);
+        for status in [LoanStatus::Active, LoanStatus::Defaulted] {
+            let mut lent = loan(true);
+            lent.collateral = token_asset(unlisted);
+            lent.status = status.clone();
+            assert_eq!(
+                value(accounts(&lent, &loan(false))),
+                Err(Error::Unpriced { mint: unlisted }),
+                "{status:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn reads_out_of_order_with_the_loan_scans_are_refused() {
         let snapshot = Snapshot::new(1, accounts(&loan(true), &loan(false))).unwrap();
         // The scans ran at slot 0, before this slot-1 read: its counters could
         // already count a loan the scans missed.
         assert!(matches!(
-            OfferbookPlan::new(VAULT, &snapshot, 0, [LENT], [BORROWED]),
-            Err(Error::Job(_))
+            OfferbookPlan::new(VAULT, &snapshot, scan(0, 0)),
+            Err(Error::ReadOrder(_))
         ));
-        assert!(OfferbookPlan::new(VAULT, &snapshot, 2, [LENT], [BORROWED]).is_ok());
+        assert!(matches!(
+            OfferbookPlan::new(VAULT, &snapshot, scan(3, 2)),
+            Err(Error::ReadOrder(_))
+        ));
+        // Valuing a read from before the later scan could see a loan that
+        // settled after it was read but before that scan: still active, and
+        // missing from the plan.
+        let plan = OfferbookPlan::new(VAULT, &snapshot, scan(1, 2)).unwrap();
+        assert!(matches!(plan.value(&snapshot), Err(Error::ReadOrder(_))));
+        let after = Snapshot::new(2, accounts(&loan(true), &loan(false))).unwrap();
+        assert!(
+            matches!(plan.value(&after), Err(Error::ClockSlot { .. })),
+            "the clock fixture is at slot 1"
+        );
     }
 
     #[test]
     fn a_loan_created_after_discovery_stops_the_mark() {
         let accounts = accounts(&loan(true), &loan(false));
         let snapshot = Snapshot::new(1, accounts.clone()).unwrap();
-        let plan = OfferbookPlan::new(VAULT, &snapshot, 1, [LENT], [BORROWED]).unwrap();
+        let plan = OfferbookPlan::new(VAULT, &snapshot, scan(1, 1)).unwrap();
         let user_key = plan.user;
         let mut later = accounts;
         later.retain(|(k, _)| *k != user_key);

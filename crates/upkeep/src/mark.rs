@@ -1,8 +1,9 @@
 //! Which position slots need a mark, and whether a value may be posted.
 
 use {
+    crate::{Result, snapshot::Snapshot},
     earn_vaults_sdk::{
-        constants::MAX_STALENESS_SECONDS,
+        constants::{MAX_STALENESS_SECONDS, drift_budget},
         state::{PositionConfig, Protocol, Vault},
     },
     solana_address::Address,
@@ -19,61 +20,153 @@ pub struct SlotState {
     /// Cleared by every settlement that moves the position; `ValidateAum`
     /// refuses an initialized slot until it is marked again.
     pub priced: bool,
+    /// A liability slot. Its marks go through the program's debt gate, which
+    /// this crate does not model.
+    pub debt: bool,
     pub last_value: u64,
     pub last_priced_at: i64,
     /// Seconds a mark stays valid for `ValidateAum`.
     pub max_staleness_seconds: i64,
+    /// Drift cap per window, in bps of the prior mark; `None` when waived.
+    pub drift_cap_bps: Option<u64>,
+    /// `Vault.aum` as last validated: a later mark's drift budget is measured
+    /// against the smaller of this and the prior mark.
+    pub validated_aum: u64,
     /// The vault has never held anything: no shares, no AUM, no marks.
     /// See [`vault_in_bootstrap`].
     pub vault_bootstrap: bool,
 }
 
 impl SlotState {
-    pub fn of(index: u8, position: &PositionConfig, vault_bootstrap: bool) -> Self {
+    pub fn of(vault: &Vault, index: u8, vault_bootstrap: bool) -> Self {
+        let position = &vault.positions[usize::from(index)];
         Self {
             vault_bootstrap,
             index,
             protocol: position.protocol,
             initialized: position.initialized(),
             priced: position.priced(),
+            debt: position.debt(),
             last_value: position.last_value.get(),
             last_priced_at: position.last_priced_at.get(),
             max_staleness_seconds: match position.max_staleness_seconds.get() {
                 0 => i64::from(MAX_STALENESS_SECONDS),
                 seconds => i64::try_from(seconds).unwrap_or(i64::MAX),
             },
+            drift_cap_bps: drift_budget(position.max_drift_bps.get()),
+            validated_aum: vault.aum.get(),
         }
     }
 
-    /// Whether posting `value` now is allowed to be built.
+    /// What to do with a valuation of `value` at clock time `now`.
     ///
-    /// On a vault still in bootstrap, a zero first mark is never posted (D34):
-    /// it would end the bootstrap, after which a deposit needs nonzero AUM, so
-    /// the first deposit could never land. Leaving the slot unmarked is correct
-    /// there: `ValidateAum` skips a never-marked slot.
+    /// - On a vault still in bootstrap, a zero first mark is never posted: it
+    ///   would end the bootstrap, after which a deposit needs nonzero AUM, so
+    ///   the first deposit could never land. Leaving the slot unmarked is
+    ///   correct there: `ValidateAum` skips a never-marked slot.
+    /// - Once the vault holds anything, a never-marked slot blocks deposits
+    ///   (`PricedSlotMissing`) until marked, and the program takes a zero
+    ///   first mark as attesting an empty slot, so zero is posted.
+    /// - A later mark may move from the prior one by at most the slot's drift
+    ///   cap of `min(prior, validated AUM)` per staleness window (the
+    ///   program's `check_drift`). A value outside that is
+    ///   [`MarkDecision::OutOfBudget`]: the chain would refuse it, and posting
+    ///   anything else would not be the value.
     ///
-    /// Once the vault holds anything, a never-marked slot blocks deposits
-    /// (`PricedSlotMissing`) until marked, and the program takes a zero first
-    /// mark as attesting an empty slot, so zero is posted.
-    pub fn decide(&self, value: u64) -> MarkDecision {
-        if value == 0 && !self.initialized && self.vault_bootstrap {
-            MarkDecision::SkipEmptyBootstrap
-        } else {
-            MarkDecision::Post {
+    /// Not modelled, so `Post` may still fail on chain: a first mark's cap
+    /// against the AUM the preceding `ValidateAum` computes, and a debt slot's
+    /// gate. `now` earlier than execution only shrinks the budget.
+    pub fn decide(&self, value: u64, now: i64) -> MarkDecision {
+        if !self.initialized {
+            if value == 0 && self.vault_bootstrap {
+                return MarkDecision::SkipEmptyBootstrap;
+            }
+            return MarkDecision::Post {
+                slot: self.index,
                 value,
-                bootstrap: !self.initialized,
+                bootstrap: true,
+            };
+        }
+        if let (false, Some(cap)) = (self.debt, self.drift_cap_bps) {
+            let max_move = self.max_move(cap, now);
+            if value.abs_diff(self.last_value) > max_move {
+                let nearest = if value > self.last_value {
+                    self.last_value.saturating_add(max_move)
+                } else {
+                    self.last_value - max_move
+                };
+                return MarkDecision::OutOfBudget {
+                    slot: self.index,
+                    target: value,
+                    nearest,
+                };
             }
         }
+        MarkDecision::Post {
+            slot: self.index,
+            value,
+            bootstrap: false,
+        }
     }
+
+    /// The largest move `check_drift` accepts at `now`: `diff × 10⁴ × window`
+    /// may not exceed `basis × cap × elapsed`, elapsed clamped to one window.
+    fn max_move(&self, cap_bps: u64, now: i64) -> u64 {
+        let window = i64::from(MAX_STALENESS_SECONDS).max(1) as u128;
+        let elapsed = (now.saturating_sub(self.last_priced_at).max(0) as u128).min(window);
+        let basis = u128::from(self.last_value.min(self.validated_aum));
+        let budget = basis * u128::from(cap_bps) * elapsed / (10_000 * window);
+        u64::try_from(budget).unwrap_or(u64::MAX)
+    }
+}
+
+/// Whether the vault is in bootstrap, reading its share mint from `snapshot`.
+pub(crate) fn slot_state(
+    snapshot: &Snapshot,
+    vault_key: &Address,
+    vault: &Vault,
+    index: u8,
+) -> Result<SlotState> {
+    let bootstrap = vault_in_bootstrap(vault, snapshot.share_supply(vault_key)?);
+    Ok(SlotState::of(vault, index, bootstrap))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MarkDecision {
-    /// Post `value`. A `bootstrap` mark needs a fresh `ValidateAum` before it,
-    /// which [`crate::jobs::attest`] places.
-    Post { value: u64, bootstrap: bool },
+    /// Post `value` into `slot`. A `bootstrap` mark needs a fresh
+    /// `ValidateAum` before it, which [`crate::jobs::attest`] places.
+    Post {
+        slot: u8,
+        value: u64,
+        bootstrap: bool,
+    },
     /// The vault is in bootstrap and the slot is worth zero: post nothing.
     SkipEmptyBootstrap,
+    /// `target` is outside the slot's drift budget, so the program would
+    /// refuse it. `nearest` is the closest value it accepts now. Nothing is
+    /// posted: the curator resets the slot or waives its cap.
+    OutOfBudget { slot: u8, target: u64, nearest: u64 },
+}
+
+impl MarkDecision {
+    /// The mark to post, signed by `signer` under `grant`; `None` when
+    /// nothing should be posted.
+    pub fn mark(self, signer: Address, grant: Grant) -> Option<Mark> {
+        match self {
+            Self::Post {
+                slot,
+                value,
+                bootstrap,
+            } => Some(Mark {
+                signer,
+                slot,
+                value,
+                bootstrap,
+                grant,
+            }),
+            Self::SkipEmptyBootstrap | Self::OutOfBudget { .. } => None,
+        }
+    }
 }
 
 /// The program's bootstrap test: no shares, nothing queued, zero AUM, and no
@@ -127,7 +220,7 @@ pub fn due_slots(
         .enumerate()
         .filter(|(_, p)| p.enabled() && p.required_in_aum())
         .filter_map(|(i, p)| {
-            let slot = SlotState::of(i as u8, p, bootstrap);
+            let slot = SlotState::of(vault, i as u8, bootstrap);
             let due = if slot.initialized && !slot.priced {
                 Due::Unpriced
             } else if !slot.initialized && !p.debt() && !bootstrap {
@@ -159,15 +252,24 @@ pub fn find_slot(vault: &Vault, protocol: Protocol) -> Option<(u8, &PositionConf
         .map(|(i, p)| (i as u8, p))
 }
 
-/// A value ready to post into `slot`, with who signs it.
+/// Which `PRICE` grant signs a mark.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Grant {
+    /// The vault-wide `PRICE` delegate.
+    Vault,
+    /// The Earn-scoped `jupiter_lend::PRICE` delegate, for JupiterLend slots.
+    JupiterLend,
+}
+
+/// A value ready to post into `slot`, with who signs it. Build it with
+/// [`MarkDecision::mark`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Mark {
     pub signer: Address,
     pub slot: u8,
     pub value: u64,
     pub bootstrap: bool,
-    /// Sign with the Earn-scoped `jupiter_lend::PRICE` grant instead of vault `PRICE`.
-    pub earn_scoped: bool,
+    pub grant: Grant,
 }
 
 #[cfg(test)]
@@ -190,41 +292,112 @@ mod tests {
             protocol: Protocol::Offerbook as u8,
             initialized,
             priced: initialized,
+            debt: false,
             last_value: 0,
             last_priced_at: 0,
             max_staleness_seconds: 60,
+            drift_cap_bps: Some(200),
+            validated_aum: 0,
+        }
+    }
+
+    const fn post(value: u64, bootstrap: bool) -> MarkDecision {
+        MarkDecision::Post {
+            slot: 0,
+            value,
+            bootstrap,
         }
     }
 
     #[test]
     fn an_empty_vault_never_gets_a_first_zero_mark() {
         assert_eq!(
-            slot(false, true).decide(0),
+            slot(false, true).decide(0, 0),
             MarkDecision::SkipEmptyBootstrap
         );
         // Past bootstrap a zero first mark attests the slot is empty, which
         // deposits wait for.
-        assert_eq!(
-            slot(false, false).decide(0),
-            MarkDecision::Post {
-                value: 0,
-                bootstrap: true
-            }
-        );
-        assert_eq!(
-            slot(false, true).decide(1),
-            MarkDecision::Post {
-                value: 1,
-                bootstrap: true
-            }
-        );
+        assert_eq!(slot(false, false).decide(0, 0), post(0, true));
+        assert_eq!(slot(false, true).decide(1, 0), post(1, true));
         // Once marked, zero is a real value that must be attested.
+        assert_eq!(slot(true, false).decide(0, 0), post(0, false));
+    }
+
+    #[test]
+    fn a_mark_outside_the_drift_budget_is_reported_not_posted() {
+        let window = i64::from(MAX_STALENESS_SECONDS);
+        let marked = SlotState {
+            last_value: 1_000_000,
+            last_priced_at: 1_000,
+            validated_aum: 5_000_000,
+            ..slot(true, false)
+        };
+        // 2% of the prior after a full window: 20,000 either way.
+        let now = 1_000 + window;
+        assert_eq!(marked.decide(1_020_000, now), post(1_020_000, false));
+        assert_eq!(marked.decide(980_000, now), post(980_000, false));
         assert_eq!(
-            slot(true, false).decide(0),
-            MarkDecision::Post {
-                value: 0,
-                bootstrap: false
+            marked.decide(1_020_001, now),
+            MarkDecision::OutOfBudget {
+                slot: 0,
+                target: 1_020_001,
+                nearest: 1_020_000
             }
+        );
+        // Half a window earns half the budget, and waiting longer than one
+        // window earns no more.
+        assert_eq!(
+            marked.decide(1_020_000, 1_000 + window / 2),
+            MarkDecision::OutOfBudget {
+                slot: 0,
+                target: 1_020_000,
+                nearest: 1_010_000
+            }
+        );
+        assert_eq!(
+            marked
+                .decide(1_020_001, now * 100)
+                .mark(Address::default(), Grant::Vault),
+            None
+        );
+        // The budget is measured against the smaller of the prior and AUM.
+        let small_aum = SlotState {
+            validated_aum: 500_000,
+            ..marked
+        };
+        assert!(matches!(
+            small_aum.decide(1_010_001, now),
+            MarkDecision::OutOfBudget {
+                nearest: 1_010_000,
+                ..
+            }
+        ));
+        // A one-unit mark has no budget at 2%: it can never reach zero.
+        let dust = SlotState {
+            last_value: 1,
+            ..marked
+        };
+        assert!(matches!(
+            dust.decide(0, now),
+            MarkDecision::OutOfBudget { nearest: 1, .. }
+        ));
+        // A waived cap, or a debt slot, posts whatever the value is.
+        for free in [
+            SlotState {
+                drift_cap_bps: None,
+                ..dust
+            },
+            SlotState { debt: true, ..dust },
+        ] {
+            assert_eq!(free.decide(0, now), post(0, false));
+        }
+        let mark = marked
+            .decide(1_000_001, now)
+            .mark(Address::default(), Grant::JupiterLend)
+            .unwrap();
+        assert_eq!(
+            (mark.value, mark.bootstrap, mark.grant),
+            (1_000_001, false, Grant::JupiterLend)
         );
     }
 

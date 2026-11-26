@@ -4,7 +4,8 @@
 //! vault's asset row, through the same gate `ValidateAum` runs: positive price,
 //! inside the row's staleness window and future-skew allowance, confidence
 //! inside `max_confidence_bps`. A keeper that refreshes in the same transaction
-//! values off the pre-refresh reading; the drift budget absorbs the gap.
+//! values against [`crate::Snapshot::with_refresh`], whose rows carry the
+//! readings that refresh installs.
 
 use {
     crate::{Error, PriceFault, Result},
@@ -19,7 +20,7 @@ use {
 };
 
 /// Which side of the confidence band a holding is struck at.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Side {
     /// Something the vault holds or is owed: price − confidence, rounded down.
     Asset,

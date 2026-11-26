@@ -14,9 +14,10 @@
 use {
     crate::{
         Error, Result,
-        mark::{SlotState, find_slot, vault_in_bootstrap},
+        mark::{SlotState, find_slot, slot_state},
         price::{RowPrice, Side, gate},
-        snapshot::{CLOCK_SYSVAR_ID, Snapshot, mint, owned_by, token_account, token_balance},
+        rows::{self, AssetRow},
+        snapshot::{CLOCK_SYSVAR_ID, Snapshot, mint, owned_by, token_balance},
     },
     earn_vaults_sdk::{
         pda::{derive_associated_token_account, derive_share_mint, derive_vault_authority},
@@ -56,6 +57,11 @@ pub struct Market {
 }
 
 impl Market {
+    /// The Earn market for `row`'s mint.
+    pub fn of(row: &AssetRow) -> Self {
+        Self::new(row.mint, row.token_program)
+    }
+
     pub fn new(mint: Address, token_program: Address) -> Self {
         let f_token_mint = derive_f_token_mint(&mint);
         Self {
@@ -92,7 +98,7 @@ impl Market {
         let Some(lending) = snapshot.get(&self.lending)? else {
             // No market, so no receipts can exist; a receipt account would be
             // an account we do not understand.
-            if token_account(snapshot, &receipt_account)?.is_some() {
+            if snapshot.get(&receipt_account)?.is_some() {
                 return Err(Error::Missing {
                     what: "Earn Lending",
                     address: self.lending,
@@ -158,72 +164,6 @@ pub struct Receipts {
     pub underlying: u64,
 }
 
-/// One row the plan values, with the token program its accounts derive under.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PlannedRow {
-    pub row: u8,
-    pub decimals: u8,
-    pub market: Market,
-}
-
-/// Every configured row's mint, read from `vault`; fetch these once with the
-/// vault to build a plan.
-pub fn discovery_keys(vault: &Vault) -> Vec<Address> {
-    vault
-        .assets
-        .iter()
-        .filter(|a| a.configured())
-        .map(|a| a.mint)
-        .collect()
-}
-
-pub(crate) fn planned_rows(snapshot: &Snapshot, vault: &Vault) -> Result<Vec<PlannedRow>> {
-    vault
-        .assets
-        .iter()
-        .enumerate()
-        .filter(|(_, a)| a.configured())
-        .map(|(i, a)| {
-            let m = mint(snapshot, &a.mint, "asset mint")?;
-            if m.decimals != a.decimals {
-                return Err(Error::Layout {
-                    what: "asset mint",
-                    address: a.mint,
-                    reason: "decimals differ from the vault row",
-                });
-            }
-            Ok(PlannedRow {
-                row: i as u8,
-                decimals: a.decimals,
-                market: Market::new(a.mint, m.token_program),
-            })
-        })
-        .collect()
-}
-
-/// The rows a plan was built from must still be the vault's rows.
-pub(crate) fn check_rows(snapshot: &Snapshot, vault: &Vault, rows: &[PlannedRow]) -> Result<()> {
-    let configured = vault
-        .assets
-        .iter()
-        .enumerate()
-        .filter(|(_, a)| a.configured());
-    if !configured
-        .clone()
-        .map(|(i, a)| (i as u8, a.mint, a.decimals))
-        .eq(rows.iter().map(|r| (r.row, r.market.mint, r.decimals)))
-    {
-        return Err(Error::PlanStale("asset rows"));
-    }
-    for row in rows {
-        if mint(snapshot, &row.market.mint, "asset mint")?.token_program != row.market.token_program
-        {
-            return Err(Error::PlanStale("asset token program"));
-        }
-    }
-    Ok(())
-}
-
 /// Which JupiterLend slots the Earn valuation accepts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EarnScope {
@@ -242,11 +182,11 @@ pub struct EarnPlan {
     pub authority: Address,
     pub slot: u8,
     pub scope: EarnScope,
-    pub rows: Vec<PlannedRow>,
+    pub rows: Vec<AssetRow>,
 }
 
 impl EarnPlan {
-    /// `snapshot` holds the vault and [`discovery_keys`].
+    /// `snapshot` holds [`rows::discovery_keys`].
     pub fn new(vault: Address, snapshot: &Snapshot, scope: EarnScope) -> Result<Self> {
         let state = snapshot.vault(&vault)?;
         let (slot, _) = earn_slot(state, scope)?;
@@ -255,7 +195,7 @@ impl EarnPlan {
             authority: derive_vault_authority(&vault),
             slot,
             scope,
-            rows: planned_rows(snapshot, state)?,
+            rows: rows::read(snapshot, state)?,
         })
     }
 
@@ -263,8 +203,8 @@ impl EarnPlan {
     pub fn keys(&self) -> Vec<Address> {
         let mut keys = vec![self.vault, CLOCK_SYSVAR_ID, derive_share_mint(&self.vault)];
         for row in &self.rows {
-            keys.push(row.market.mint);
-            keys.extend(row.market.keys(&self.authority));
+            keys.push(row.mint);
+            keys.extend(Market::of(row).keys(&self.authority));
         }
         keys
     }
@@ -272,25 +212,23 @@ impl EarnPlan {
     pub fn value(&self, snapshot: &Snapshot) -> Result<EarnValuation> {
         let now = snapshot.now()?;
         let vault = snapshot.vault(&self.vault)?;
-        let (slot, position) = earn_slot(vault, self.scope)?;
+        let (slot, _) = earn_slot(vault, self.scope)?;
         if slot != self.slot {
             return Err(Error::PlanStale("Earn slot"));
         }
-        check_rows(snapshot, vault, &self.rows)?;
+        rows::check(snapshot, vault, &self.rows)?;
         let mut value = 0u64;
         let mut markets = Vec::new();
         for row in &self.rows {
-            let Some(receipts) = row
-                .market
-                .redeemable(snapshot, &self.authority, row.decimals)?
-            else {
+            let market = Market::of(row);
+            let Some(receipts) = market.redeemable(snapshot, &self.authority, row.decimals)? else {
                 continue;
             };
             // A zero holding needs no price, as in `ValidateAum`.
             let (price, worth) = if receipts.underlying == 0 {
                 (None, 0)
             } else {
-                let price = gate(row.row, &vault.assets[row.row as usize], now)?;
+                let price = gate(row.index, &vault.assets[usize::from(row.index)], now)?;
                 let worth = price.value(receipts.underlying.into(), Side::Asset)?;
                 (Some(price), worth)
             };
@@ -298,15 +236,15 @@ impl EarnPlan {
                 .checked_add(worth)
                 .ok_or(Error::Overflow("Earn value"))?;
             markets.push(EarnMarketValue {
-                row: row.row,
-                market: row.market,
+                row: row.index,
+                market,
                 receipts,
                 price,
                 value: worth,
             });
         }
         Ok(EarnValuation {
-            slot: SlotState::of(slot, position, in_bootstrap(snapshot, &self.vault, vault)?),
+            slot: slot_state(snapshot, &self.vault, vault, slot)?,
             now,
             value,
             markets,
@@ -350,7 +288,7 @@ pub struct EarnMarketValue {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EarnValuation {
-    /// The slot as the vault recorded it; [`SlotState::decide`] turns
+    /// The slot as the vault recorded it; `slot.decide(value, now)` turns
     /// `value` into a mark.
     pub slot: SlotState,
     /// Clock time the valuation holds at.
@@ -368,18 +306,4 @@ impl EarnValuation {
             .filter_map(|m| m.price.map(|p| p.valid_until))
             .min()
     }
-}
-
-/// Whether the vault is in bootstrap, reading the share mint's supply.
-pub(crate) fn in_bootstrap(snapshot: &Snapshot, key: &Address, vault: &Vault) -> Result<bool> {
-    let share_mint = derive_share_mint(key);
-    if vault.share_mint != share_mint {
-        return Err(Error::Layout {
-            what: "vault",
-            address: *key,
-            reason: "share mint is not the vault's PDA",
-        });
-    }
-    let supply = mint(snapshot, &share_mint, "share mint")?.supply;
-    Ok(vault_in_bootstrap(vault, supply))
 }

@@ -2,7 +2,10 @@
 
 use {
     crate::{Error, Result},
-    earn_vaults_sdk::state::{Account as _, Vault},
+    earn_vaults_sdk::{
+        pda::derive_share_mint,
+        state::{Account as _, Vault},
+    },
     solana_address::Address,
     std::collections::BTreeMap,
 };
@@ -30,10 +33,16 @@ pub struct Account {
 /// A read that failed is not `None`: leave it out of the snapshot, and the
 /// valuation fails with [`Error::NotFetched`] instead of seeing an empty
 /// account.
+///
+/// An empty, system-owned account also reads as `None`. Anyone can send SOL
+/// to an unused address, a PDA included, which leaves exactly that; it holds
+/// nothing and must not stop a valuation.
 #[derive(Debug, Clone, Default)]
 pub struct Snapshot {
     slot: u64,
     accounts: BTreeMap<Address, Option<Account>>,
+    /// The clock time of a simulated refresh, set by [`Self::with_refresh`].
+    refreshed_at: Option<i64>,
 }
 
 impl Snapshot {
@@ -43,6 +52,7 @@ impl Snapshot {
     ) -> Result<Self> {
         let mut map = BTreeMap::new();
         for (key, account) in accounts {
+            let account = account.filter(|a| !(a.owner == SYSTEM_PROGRAM_ID && a.data.is_empty()));
             match map.get(&key) {
                 Some(seen) if *seen != account => return Err(Error::Conflicting(key)),
                 _ => {
@@ -53,6 +63,72 @@ impl Snapshot {
         Ok(Self {
             slot,
             accounts: map,
+            refreshed_at: None,
+        })
+    }
+
+    /// This snapshot with the prices a `RefreshPrices` installs, for marks
+    /// sent in the same transaction as that refresh.
+    ///
+    /// `vault` and `clock` are the vault and clock sysvar a simulation of the
+    /// refresh returns (`simulateTransaction` with `accounts`). The simulation
+    /// cannot return the whole snapshot: it returns at most as many accounts as
+    /// the transaction lists. So holdings stay as read at [`Self::slot`] and only the
+    /// asset rows' cached readings and `prices_changed_at` are taken from
+    /// the refreshed vault. The transaction installs the same signed readings.
+    /// Valuations then gate prices at the simulated clock time.
+    pub fn with_refresh(
+        &self,
+        vault_key: &Address,
+        vault: &Account,
+        clock: &Account,
+    ) -> Result<Self> {
+        owned_by(vault, vault_key, &earn_vaults_sdk::ID, "refreshed vault")?;
+        let fresh = Vault::read(&vault.data).map_err(|_| Error::Layout {
+            what: "refreshed vault",
+            address: *vault_key,
+            reason: "not a vault account",
+        })?;
+        let (slot, now) = read_clock(clock)?;
+        if slot < self.slot {
+            return Err(Error::ReadOrder(
+                "simulate the refresh after the snapshot read",
+            ));
+        }
+        let mut accounts = self.accounts.clone();
+        let current = accounts
+            .get_mut(vault_key)
+            .ok_or(Error::NotFetched(*vault_key))?
+            .as_mut()
+            .ok_or(Error::Missing {
+                what: "vault",
+                address: *vault_key,
+            })?;
+        owned_by(current, vault_key, &earn_vaults_sdk::ID, "vault")?;
+        let state = Vault::read_mut(&mut current.data).map_err(|_| Error::Layout {
+            what: "vault",
+            address: *vault_key,
+            reason: "not a vault account",
+        })?;
+        for (row, new) in state.assets.iter_mut().zip(&fresh.assets) {
+            let identity = |a: &earn_vaults_sdk::state::AssetConfig| {
+                (a.configured(), a.mint, a.decimals, a.oracle, a.quote_oracle)
+            };
+            if identity(row) != identity(new) {
+                return Err(Error::PlanStale("asset rows changed before the refresh"));
+            }
+            row.last_price = new.last_price;
+            row.last_conf = new.last_conf;
+            row.last_price_expo = new.last_price_expo;
+            row.last_publish_time = new.last_publish_time;
+            row.base_publish_time = new.base_publish_time;
+            row.quote_publish_time = new.quote_publish_time;
+        }
+        state.prices_changed_at = fresh.prices_changed_at;
+        Ok(Self {
+            slot: self.slot,
+            accounts,
+            refreshed_at: Some(now),
         })
     }
 
@@ -75,29 +151,35 @@ impl Snapshot {
         })
     }
 
-    /// `Clock.unix_timestamp`, after checking the sysvar belongs to this slot.
+    /// `Clock.unix_timestamp`, after checking the sysvar belongs to this
+    /// slot; the simulated refresh's time after [`Self::with_refresh`].
     pub fn now(&self) -> Result<i64> {
-        let clock = self.require(&CLOCK_SYSVAR_ID, "clock sysvar")?;
-        owned_by(clock, &CLOCK_SYSVAR_ID, &SYSVAR_PROGRAM_ID, "clock sysvar")?;
-        let field = |at: usize| -> Result<[u8; 8]> {
-            clock
-                .data
-                .get(at..at + 8)
-                .and_then(|bytes| bytes.try_into().ok())
-                .ok_or(Error::Layout {
-                    what: "clock sysvar",
-                    address: CLOCK_SYSVAR_ID,
-                    reason: "shorter than 40 bytes",
-                })
-        };
-        let slot = u64::from_le_bytes(field(0)?);
+        let (slot, now) = read_clock(self.require(&CLOCK_SYSVAR_ID, "clock sysvar")?)?;
         if slot != self.slot {
             return Err(Error::ClockSlot {
                 clock: slot,
                 snapshot: self.slot,
             });
         }
-        Ok(i64::from_le_bytes(field(32)?))
+        Ok(self.refreshed_at.unwrap_or(now))
+    }
+
+    /// An SPL Token or Token-2022 mint.
+    pub fn mint(&self, key: &Address) -> Result<Mint> {
+        mint(self, key, "mint")
+    }
+
+    /// The supply of the vault's share mint, checked to be the vault's PDA.
+    pub fn share_supply(&self, vault_key: &Address) -> Result<u64> {
+        let share_mint = derive_share_mint(vault_key);
+        if self.vault(vault_key)?.share_mint != share_mint {
+            return Err(Error::Layout {
+                what: "vault",
+                address: *vault_key,
+                reason: "share mint is not the vault's PDA",
+            });
+        }
+        Ok(mint(self, &share_mint, "share mint")?.supply)
     }
 
     /// The vault account, checked for owner and exact layout.
@@ -110,6 +192,19 @@ impl Snapshot {
             reason: "not a vault account",
         })
     }
+}
+
+/// `(slot, unix_timestamp)` of a clock sysvar account.
+fn read_clock(clock: &Account) -> Result<(u64, i64)> {
+    owned_by(clock, &CLOCK_SYSVAR_ID, &SYSVAR_PROGRAM_ID, "clock sysvar")?;
+    if clock.data.len() < 40 {
+        return Err(Error::Layout {
+            what: "clock sysvar",
+            address: CLOCK_SYSVAR_ID,
+            reason: "shorter than 40 bytes",
+        });
+    }
+    Ok((u64_at(&clock.data, 0), u64_at(&clock.data, 32) as i64))
 }
 
 pub(crate) fn owned_by(
@@ -176,19 +271,6 @@ pub(crate) fn mint(snapshot: &Snapshot, key: &Address, what: &'static str) -> Re
     })
 }
 
-/// The account at a token-account address, `None` when no token account is
-/// there. Anyone can send SOL to an unused address, leaving an empty
-/// system-owned account; that holds no tokens either, and must not stop a
-/// valuation.
-pub(crate) fn token_account<'a>(
-    snapshot: &'a Snapshot,
-    key: &Address,
-) -> Result<Option<&'a Account>> {
-    Ok(snapshot
-        .get(key)?
-        .filter(|a| !(a.owner == SYSTEM_PROGRAM_ID && a.data.is_empty())))
-}
-
 /// The balance of a token account that must hold `mint` for `owner`.
 /// An address with no token account holds nothing; any other mismatch fails.
 pub(crate) fn token_balance(
@@ -198,7 +280,7 @@ pub(crate) fn token_balance(
     owner: &Address,
     what: &'static str,
 ) -> Result<u64> {
-    let Some(account) = token_account(snapshot, key)? else {
+    let Some(account) = snapshot.get(key)? else {
         return Ok(0);
     };
     token_program(account, key, what)?;
@@ -313,6 +395,50 @@ pub(crate) mod tests {
         let mut short = token(&mint, &owner, 7).unwrap();
         short.data.truncate(100);
         assert!(matches!(read(Some(short)), Err(Error::Layout { .. })));
+    }
+
+    #[test]
+    fn a_refresh_replaces_row_prices_and_nothing_else() {
+        use {crate::price::tests::asset, earn_vaults_sdk::zeropod::U64};
+        let key = Address::new_from_array([7; 32]);
+        let usdc = Address::new_from_array([1; 32]);
+        let vault = |price: i64, at: i64, aum: u64| {
+            let mut data = vec![0u8; Vault::LEN];
+            data[0] = Vault::DISCRIMINATOR;
+            let v = Vault::read_mut(&mut data).unwrap();
+            v.assets[0] = asset(usdc, price, 1_000, -8, at);
+            v.aum = U64::from(aum);
+            Account {
+                owner: earn_vaults_sdk::ID,
+                data,
+            }
+        };
+        let snapshot = Snapshot::new(
+            10,
+            [(key, Some(vault(100_000_000, 990, 5))), clock(10, 1_000)],
+        )
+        .unwrap();
+        let fresh = vault(99_000_000, 1_004, 6);
+        let refreshed = snapshot
+            .with_refresh(&key, &fresh, &clock(12, 1_005).1.unwrap())
+            .unwrap();
+        let v = refreshed.vault(&key).unwrap();
+        assert_eq!(v.assets[0].last_price.get(), 99_000_000);
+        assert_eq!(v.assets[0].last_publish_time.get(), 1_004);
+        assert_eq!(v.aum.get(), 5, "only prices come from the simulation");
+        assert_eq!(refreshed.now(), Ok(1_005));
+        assert_eq!(refreshed.slot(), 10);
+        // A simulation older than the read, or rows that changed, cannot be used.
+        assert!(matches!(
+            snapshot.with_refresh(&key, &fresh, &clock(9, 999).1.unwrap()),
+            Err(Error::ReadOrder(_))
+        ));
+        let mut moved = fresh.clone();
+        Vault::read_mut(&mut moved.data).unwrap().assets[0].mint = key;
+        assert!(matches!(
+            snapshot.with_refresh(&key, &moved, &clock(12, 1_005).1.unwrap()),
+            Err(Error::PlanStale(_))
+        ));
     }
 
     #[test]

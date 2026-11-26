@@ -4,20 +4,23 @@
 //! wallet, a KMS key and a Squads proposal each wrap the same list. Compute
 //! budget and fee payer are the caller's.
 //!
-//! - [`attest`]: refresh → marks → `ValidateAum` (#274). A bootstrap mark is
-//!   capped against fresh validated AUM, and a refresh clears that snapshot,
-//!   so bootstrap marks go after a first `ValidateAum`, followed by a second.
+//! - [`attest`]: refresh → marks → `ValidateAum` (#274). A first mark is
+//!   capped against fresh validated AUM, and every mark clears that snapshot,
+//!   so each first mark gets a `ValidateAum` right before it.
 //! - [`fill_redeem`]: a fresh `ValidateAum` right before the settlement, even
-//!   after a deposit settlement earlier in the list (#278), then
-//!   `CrystallizeFees` when the fill would leave fee debt above half the
-//!   remaining AUM (#290), then `FulfillRedeem`.
+//!   after a deposit settlement earlier in the list (#278), optionally
+//!   `CrystallizeFees` (#290), then `FulfillRedeem`.
 //! - [`crystallize`]: a fresh `ValidateAum`, then `CrystallizeFees`.
 
 use {
-    crate::{Error, Result, earn::PlannedRow, mark::Mark, snapshot::Account},
+    crate::{
+        Error, Result,
+        mark::{Grant, Mark},
+        rows::AssetRow,
+        snapshot::Account,
+    },
     earn_vaults_sdk::{
         instructions::{CrystallizeFees, FulfillRedeem, PriceOpaque, ValidateAum},
-        nav::shares_for_deposit,
         pda::{derive_associated_token_account, derive_escrow, derive_share_mint},
         state::{
             Account as _, Escrow, FULFILLED_PARTIAL, FULFILLED_PENDING, Pause, REQUEST_TYPE_REDEEM,
@@ -28,20 +31,27 @@ use {
     solana_instruction::Instruction,
 };
 
+/// One `PRICE_IN_AUM` row's custody: the vault authority's ATA of its mint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Custody {
+    pub mint: Address,
+    pub token_program: Address,
+    pub account: Address,
+}
+
 /// The accounts every job on one vault shares.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VaultKeys {
     pub vault: Address,
     pub share_mint: Address,
-    /// `(mint, token program, custody ATA)` per `PRICE_IN_AUM` row, in row
-    /// order: the order `ValidateAum` checks.
-    pub custody: Vec<(Address, Address, Address)>,
+    /// Per `PRICE_IN_AUM` row, in row order: the order `ValidateAum` checks.
+    pub custody: Vec<Custody>,
 }
 
 impl VaultKeys {
-    /// `rows` come from a plan ([`crate::earn::EarnPlan::rows`] or
-    /// [`crate::offerbook::OfferbookPlan::rows`]) built against `state`.
-    pub fn new(vault: Address, state: &Vault, rows: &[PlannedRow]) -> Result<Self> {
+    /// `rows` are the vault's configured rows ([`crate::rows::read`], or a
+    /// plan's `rows`) as of `state`.
+    pub fn new(vault: Address, state: &Vault, rows: &[AssetRow]) -> Result<Self> {
         let authority = earn_vaults_sdk::pda::derive_vault_authority(&vault);
         let custody = state
             .assets
@@ -51,13 +61,17 @@ impl VaultKeys {
             .map(|(i, a)| {
                 let row = rows
                     .iter()
-                    .find(|r| usize::from(r.row) == i && r.market.mint == a.mint)
+                    .find(|r| usize::from(r.index) == i && r.mint == a.mint)
                     .ok_or(Error::PlanStale("asset rows"))?;
-                Ok((
-                    a.mint,
-                    row.market.token_program,
-                    derive_associated_token_account(&authority, &a.mint, &row.market.token_program),
-                ))
+                Ok(Custody {
+                    mint: a.mint,
+                    token_program: row.token_program,
+                    account: derive_associated_token_account(
+                        &authority,
+                        &a.mint,
+                        &row.token_program,
+                    ),
+                })
             })
             .collect::<Result<_>>()?;
         Ok(Self {
@@ -71,7 +85,7 @@ impl VaultKeys {
         ValidateAum {
             vault: self.vault,
             share_mint: self.share_mint,
-            custody_token_accounts: self.custody.iter().map(|c| c.2).collect(),
+            custody_token_accounts: self.custody.iter().map(|c| c.account).collect(),
         }
         .into_instruction()
     }
@@ -88,17 +102,21 @@ fn mark_ix(keys: &VaultKeys, mark: &Mark) -> Instruction {
         slot: mark.slot,
         value: mark.value,
     };
-    if mark.earn_scoped {
-        build.into_earn_instruction()
-    } else {
-        build.into_instruction()
+    match mark.grant {
+        Grant::JupiterLend => build.into_earn_instruction(),
+        Grant::Vault => build.into_instruction(),
     }
 }
 
 /// `refresh`, then each mark, then `ValidateAum`. `refresh` is the caller's
 /// `RefreshPrices` list (Pyth Core accounts, a Pyth Pro pair, or Chainlink
-/// reports), placed first and unchanged. Build marks with
-/// [`crate::mark::SlotState::decide`], which never yields a zero bootstrap.
+/// reports), placed first and unchanged; value the marks against
+/// [`crate::Snapshot::with_refresh`] so they use the prices it installs.
+///
+/// Build marks with [`crate::mark::MarkDecision::mark`]. Later marks go first
+/// and one `ValidateAum` follows them. Every mark clears the validated AUM a
+/// first mark is capped against, so each first (`bootstrap`) mark gets its
+/// own `ValidateAum` before it, and a last one closes the list.
 pub fn attest(
     keys: &VaultKeys,
     refresh: Vec<Instruction>,
@@ -116,16 +134,11 @@ pub fn attest(
             .filter(|m| !m.bootstrap)
             .map(|m| mark_ix(keys, m)),
     );
-    ixs.push(keys.validate_aum());
-    if marks.iter().any(|m| m.bootstrap) {
-        ixs.extend(
-            marks
-                .iter()
-                .filter(|m| m.bootstrap)
-                .map(|m| mark_ix(keys, m)),
-        );
+    for mark in marks.iter().filter(|m| m.bootstrap) {
         ixs.push(keys.validate_aum());
+        ixs.push(mark_ix(keys, mark));
     }
+    ixs.push(keys.validate_aum());
     Ok(ixs)
 }
 
@@ -178,8 +191,14 @@ impl QueuedRedeem {
 /// Settle one queued redeem. `prior` is everything that must run first in the
 /// same transaction, typically [`attest`]'s list when marks are due. A fresh
 /// `ValidateAum` is appended unless `prior` already ends with one.
-/// `crystallize_payer` adds `CrystallizeFees` before the fill; decide it with
-/// [`crystallize_before_fill`].
+///
+/// `crystallize_payer` adds `CrystallizeFees` before the fill. Leave it `None`
+/// unless a simulation of the list fails with `FeeDebtAboveCap` (#290): then
+/// the fill would leave fee debt above half the AUM left behind, and must
+/// crystallize first. Whether it does depends on the AUM this transaction's
+/// `ValidateAum` computes, which no builder sees. Crystallizing when not
+/// needed is not free: it fails on dust fees (`FeeAmountTooSmall`) and moves
+/// the redeem's payout.
 pub fn fill_redeem(
     keys: &VaultKeys,
     state: &Vault,
@@ -191,14 +210,23 @@ pub fn fill_redeem(
     if state.paused & Pause::Redeem as u8 != 0 {
         return Err(Error::Job("redemptions are paused"));
     }
-    let (mint, token_program, custody) = match redeem.payout_mint {
-        Some(mint) => keys.custody.iter().find(|c| c.0 == mint),
-        None => state
-            .canonical_base_asset()
-            .and_then(|(_, base)| keys.custody.iter().find(|c| c.0 == base.mint)),
-    }
-    .copied()
-    .ok_or(Error::Job("the payout asset has no priced custody row"))?;
+    let payout = match redeem.payout_mint {
+        Some(mint) => Some(mint),
+        None => state.canonical_base_asset().map(|(_, base)| base.mint),
+    };
+    // `FulfillRedeem` pays only from a row that takes deposits and is priced.
+    let custody = payout
+        .filter(|mint| {
+            state
+                .assets
+                .iter()
+                .any(|a| a.mint == *mint && a.deposit_enabled() && a.price_in_aum())
+        })
+        .and_then(|mint| keys.custody.iter().find(|c| c.mint == mint))
+        .copied()
+        .ok_or(Error::Job(
+            "the payout asset has no priced, deposit-enabled custody row",
+        ))?;
     let mut ixs = prior;
     if !ixs.last().is_some_and(|ix| keys.is_validate_aum(ix)) {
         ixs.push(keys.validate_aum());
@@ -218,9 +246,9 @@ pub fn fill_redeem(
             vault: keys.vault,
             user: redeem.owner,
             nonce: redeem.nonce,
-            base_mint: mint,
-            vault_token_account: custody,
-            token_program,
+            base_mint: custody.mint,
+            vault_token_account: custody.account,
+            token_program: custody.token_program,
         }
         .into_instruction(),
     );
@@ -244,61 +272,13 @@ pub fn crystallize(keys: &VaultKeys, prior: Vec<Instruction>, payer: Address) ->
     ixs
 }
 
-/// Whether to put `CrystallizeFees` before a redeem fill (#290).
-///
-/// The program refuses a fill that leaves fee debt above half the AUM left
-/// behind, while a crystallization could mint. Whether a fill trips that
-/// depends on the AUM this transaction's `ValidateAum` computes, which a
-/// builder cannot know, so crystallize whenever fees are owed and
-/// `CrystallizeFees` would succeed. Crystallizing early changes no value.
-///
-/// `CrystallizeFees` fails, and takes the fill down with it, while
-/// subscriptions are paused, on a zero fee-net AUM, or when both recipients'
-/// fee shares round to zero (`FeeAmountTooSmall`), so each of those returns
-/// `false`. This replays the program's fold and share conversion on a copy
-/// of the vault, against the stored AUM. The `ValidateAum` ahead of the fill
-/// restates AUM and can change the answer either way: a dust fee that grows
-/// above the high-water mark, or a fee that falls back to dust. Only that
-/// post-validation state settles it, so simulate the list before sending and
-/// rebuild with the other choice when the simulation fails with
-/// `FeeAmountTooSmall` (drop `CrystallizeFees`) or `FeeDebtAboveCap` (add it).
-pub fn crystallize_before_fill(vault_data: &[u8], share_supply: u64, now: i64) -> Result<bool> {
-    let mut data = vault_data.to_vec();
-    let vault = Vault::read_mut(&mut data).map_err(|_| Error::Job("not a vault account"))?;
-    let eff_supply = vault.eff_supply(share_supply);
-    if vault.paused & Pause::Subscribe as u8 != 0
-        || eff_supply == 0
-        || vault.fee_mint_blocked(eff_supply)
-        || vault.raw_fee_liability(share_supply, now) == 0
-    {
-        return Ok(false);
-    }
-    vault.accrue_fees(share_supply, now);
-    let fee_net_aum = vault.eff_aum(share_supply, now);
-    if fee_net_aum == 0 {
-        return Ok(false);
-    }
-    // The program prices fee shares against the fee-net book plus the
-    // confidence band reserve, rounded up.
-    let reserve =
-        (u128::from(vault.aum.get()) * u128::from(vault.aum_conf_bps.get())).div_ceil(10_000);
-    let fee_basis = u64::try_from(u128::from(fee_net_aum) + reserve)
-        .map_err(|_| Error::Overflow("fee basis"))?;
-    let fees = vault.fee_breakdown();
-    let shares = |amount| {
-        shares_for_deposit(amount, eff_supply, fee_basis).map_err(|_| Error::Overflow("fee shares"))
-    };
-    Ok(shares(fees.curator_total())? > 0 || shares(fees.protocol_total())? > 0)
-}
-
 #[cfg(test)]
 mod tests {
     use {
         super::*,
-        crate::earn::{Market, PlannedRow},
         earn_vaults_sdk::{
             state::{ASSET_FLAG_DEPOSIT_ENABLED, ASSET_FLAG_PRICE_IN_AUM, REQUEST_TYPE_REDEEM},
-            zeropod::{I64, U16, U64, U128},
+            zeropod::U64,
         },
     };
 
@@ -318,10 +298,11 @@ mod tests {
     }
 
     fn keys(data: &[u8]) -> VaultKeys {
-        let rows = [PlannedRow {
-            row: 0,
+        let rows = [AssetRow {
+            index: 0,
+            mint: USDC,
             decimals: 6,
-            market: Market::new(USDC, TOKEN),
+            token_program: TOKEN,
         }];
         VaultKeys::new(VAULT, Vault::read(data).unwrap(), &rows).unwrap()
     }
@@ -332,7 +313,7 @@ mod tests {
             slot,
             value,
             bootstrap,
-            earn_scoped: false,
+            grant: Grant::Vault,
         }
     }
 
@@ -388,11 +369,27 @@ mod tests {
     }
 
     #[test]
-    fn earn_scoped_marks_use_the_earn_delegate() {
+    fn each_first_mark_gets_its_own_fresh_validate() {
+        let data = vault_bytes();
+        let keys = keys(&data);
+        let validate = keys.validate_aum();
+        // Every mark clears the validated AUM the next first mark is capped
+        // against (`PricedSlotStale` otherwise).
+        let ixs = attest(&keys, vec![], &[mark(0, 5, true), mark(1, 0, true)]).unwrap();
+        assert_eq!(ixs.len(), 5);
+        assert_eq!(ixs[0], validate);
+        assert_eq!(slot_of(&ixs[1]), Some(0));
+        assert_eq!(ixs[2], validate);
+        assert_eq!(slot_of(&ixs[3]), Some(1));
+        assert_eq!(ixs[4], validate);
+    }
+
+    #[test]
+    fn jupiter_lend_grant_marks_use_the_earn_delegate() {
         let data = vault_bytes();
         let keys = keys(&data);
         let scoped = Mark {
-            earn_scoped: true,
+            grant: Grant::JupiterLend,
             ..mark(0, 10, false)
         };
         let ixs = attest(&keys, vec![], &[scoped]).unwrap();
@@ -461,7 +458,7 @@ mod tests {
     }
 
     #[test]
-    fn a_fill_refuses_paused_redemptions_and_unpriced_payouts() {
+    fn a_fill_refuses_paused_redemptions_and_payout_rows_it_cannot_pay_from() {
         let mut data = vault_bytes();
         let keys = keys(&data);
         let other = QueuedRedeem {
@@ -479,6 +476,21 @@ mod tests {
             )
             .is_err()
         );
+        // A priced row that no longer takes deposits cannot pay out.
+        Vault::read_mut(&mut data).unwrap().assets[0].flags = ASSET_FLAG_PRICE_IN_AUM;
+        assert!(
+            fill_redeem(
+                &keys,
+                Vault::read(&data).unwrap(),
+                vec![],
+                SIGNER,
+                &redeem(),
+                None
+            )
+            .is_err()
+        );
+        Vault::read_mut(&mut data).unwrap().assets[0].flags =
+            ASSET_FLAG_PRICE_IN_AUM | ASSET_FLAG_DEPOSIT_ENABLED;
         Vault::read_mut(&mut data).unwrap().paused = Pause::Redeem as u8;
         assert!(
             fill_redeem(
@@ -491,34 +503,6 @@ mod tests {
             )
             .is_err()
         );
-    }
-
-    #[test]
-    fn crystallize_before_a_fill_only_when_the_fee_can_mint() {
-        let mut data = vault_bytes();
-        let now = 1_000_000;
-        {
-            let v = Vault::read_mut(&mut data).unwrap();
-            v.aum = U64::from(1_000_000_000u64);
-            v.last_fee_accrual_at = I64::from(now);
-            v.hwm_nav = U128::from(u128::MAX / 4);
-        }
-        // No fee debt: nothing to crystallize.
-        assert_eq!(crystallize_before_fill(&data, 100_000_000, now), Ok(false));
-        // Dust that rounds to zero fee shares: CrystallizeFees would fail with
-        // FeeAmountTooSmall and take the fill down, so leave it out.
-        Vault::read_mut(&mut data).unwrap().perf_fee_accrued = U64::from(1u64);
-        assert_eq!(crystallize_before_fill(&data, 100_000_000, now), Ok(false));
-        // A fee that mints: crystallize, whatever AUM the fill will see.
-        Vault::read_mut(&mut data).unwrap().perf_fee_accrued = U64::from(1_000_000u64);
-        assert_eq!(crystallize_before_fill(&data, 100_000_000, now), Ok(true));
-        // Not while subscriptions are paused (CrystallizeFees would fail) or a
-        // mint is impossible (the program waives the gate).
-        Vault::read_mut(&mut data).unwrap().paused = Pause::Subscribe as u8;
-        assert_eq!(crystallize_before_fill(&data, 100_000_000, now), Ok(false));
-        Vault::read_mut(&mut data).unwrap().paused = 0;
-        Vault::read_mut(&mut data).unwrap().aum_conf_bps = U16::from(u16::MAX);
-        assert_eq!(crystallize_before_fill(&data, 100_000_000, now), Ok(false));
     }
 
     #[test]
