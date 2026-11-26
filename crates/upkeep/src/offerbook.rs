@@ -19,7 +19,17 @@
 //! up. Interest follows Offerbook's own accounting: it accrues from the start
 //! of the current period (`expired_at − duration`), so an extended loan counts
 //! only the period it is in; the borrower paid the earlier ones at extension.
-//! Overdue loans, and any mint without a row, fail closed.
+//! Any mint without a row fails closed, and so does an overdue lent loan: the
+//! vault, as lender, should claim it.
+//!
+//! An overdue *borrowed* loan is valued as it was before it fell due, and
+//! listed in [`OfferbookValuation::overdue_borrowed`]. Past `expired_at`
+//! Offerbook still takes full repayment of the same debt, which no longer
+//! grows, while the lender may claim at any moment. Until either happens the
+//! collateral is still locked for the vault and the debt still owed, so that
+//! is the value; a claim drops the loan from the next valuation. Failing
+//! instead would freeze the vault's share flows while the loan is late, and
+//! valuing it at zero would ask for a mark move the drift guard refuses.
 //!
 //! A lent loan's collateral mint must be a priced row too, while the loan is
 //! active or claimed: a claim moves that collateral into the escrow, where
@@ -249,17 +259,22 @@ impl OfferbookPlan {
             }
         }
         let mut expires_at = None::<i64>;
+        let mut overdue_borrowed = Vec::new();
         let loans = self.lent.iter().map(|k| (k, true));
         for (key, lent) in loans.chain(self.borrowed.iter().map(|k| (k, false))) {
             let Some(loan) = self.loan(snapshot, vault, key, lent, now)? else {
                 continue;
             };
-            // Due, and so unvaluable, from `expired_at` on.
-            let last_second = i64::try_from(loan.expired_at - 1).map_err(|_| Error::Loan {
-                loan: *key,
-                reason: LoanFault::ExpiryOutOfRange,
-            })?;
-            expires_at = Some(expires_at.map_or(last_second, |e| e.min(last_second)));
+            if lent {
+                // Due, and so unvaluable, from `expired_at` on.
+                let last_second = i64::try_from(loan.expired_at - 1).map_err(|_| Error::Loan {
+                    loan: *key,
+                    reason: LoanFault::ExpiryOutOfRange,
+                })?;
+                expires_at = Some(expires_at.map_or(last_second, |e| e.min(last_second)));
+            } else if is_due(&loan, now) {
+                overdue_borrowed.push(*key);
+            }
             let fee_bps = if lent {
                 match repay_fee_bps {
                     Some(bps) => bps,
@@ -322,6 +337,7 @@ impl OfferbookPlan {
             totals,
             valid_until,
             repay_fee_bps,
+            overdue_borrowed,
         })
     }
 
@@ -369,9 +385,8 @@ impl OfferbookPlan {
         if loan.duration == 0 {
             return Err(fail(LoanFault::ZeroDuration));
         }
-        // Offerbook's `fail_if_due`: due at `expired_at`, when repayment is
-        // refused and the lender may claim.
-        if u64::try_from(now).map_or(true, |now| now >= loan.expired_at) {
+        // A borrowed loan stays valued past due; see the module docs.
+        if lent && is_due(&loan, now) {
             return Err(fail(LoanFault::PastDue));
         }
         if loan.repaid_principal > loan.principal_amount {
@@ -457,6 +472,12 @@ impl OfferbookPlan {
             },
         ])
     }
+}
+
+/// Offerbook's `fail_if_due`: due from `expired_at` on, when paydowns and
+/// extensions stop and the lender may claim.
+fn is_due(loan: &Loan, now: i64) -> bool {
+    u64::try_from(now).map_or(true, |now| now >= loan.expired_at)
 }
 
 fn to_u64(amount: u128) -> Result<u64> {
@@ -564,10 +585,13 @@ pub struct OfferbookValuation {
     pub liabilities: u64,
     pub components: Vec<Component>,
     pub totals: Vec<MintTotal>,
-    /// The last second every price passes its gate and no active loan is due.
+    /// The last second every price passes its gate and no lent loan is due.
     pub valid_until: Option<i64>,
     /// The repay fee taken out of lent interest; `None` without active lent loans.
     pub repay_fee_bps: Option<u16>,
+    /// Borrowed loans past their due time, valued as before it: the lender
+    /// may claim their collateral at any moment. Repay them, or alert.
+    pub overdue_borrowed: Vec<Address>,
 }
 
 #[cfg(test)]
@@ -868,14 +892,13 @@ mod tests {
     }
 
     #[test]
-    fn overdue_and_unknown_loans_never_become_zero() {
+    fn overdue_lent_and_unknown_loans_never_become_zero() {
         for (mutate, side) in [
             (
                 (|l: &mut Loan| l.expired_at = NOW as u64 - 1) as fn(&mut Loan),
                 true,
             ),
-            (|l: &mut Loan| l.expired_at = NOW as u64 - 1, false),
-            // Due at `expired_at` itself: Offerbook already refuses repayment.
+            // Due at `expired_at` itself, as Offerbook's `fail_if_due`.
             (|l: &mut Loan| l.expired_at = NOW as u64, true),
             (|l: &mut Loan| l.duration = 0, true),
             (|l: &mut Loan| l.loan_type = LoanType::Leverage, true),
@@ -906,6 +929,24 @@ mod tests {
                 reason: LoanFault::PastDue
             })
         );
+        // An overdue borrowed loan keeps its value: the debt is fixed, the
+        // collateral still locked, and only a claim would remove both.
+        let on_time = value(accounts(&loan(true), &loan(false))).unwrap();
+        assert!(on_time.overdue_borrowed.is_empty());
+        for expired_at in [NOW as u64, NOW as u64 - 1_000] {
+            let mut late = loan(false);
+            late.expired_at = expired_at;
+            let v = value(accounts(&loan(true), &late)).unwrap();
+            assert_eq!(v.value, on_time.value);
+            assert_eq!(v.components, on_time.components);
+            assert_eq!(v.overdue_borrowed, [BORROWED]);
+            assert_eq!(v.valid_until, on_time.valid_until);
+        }
+        // Once claimed, the loan is no holding: its collateral and debt are gone.
+        let mut claimed = loan(false);
+        claimed.status = LoanStatus::Defaulted;
+        let v = value(accounts(&loan(true), &claimed)).unwrap();
+        assert!(v.components.iter().all(|c| c.account != BORROWED));
         // Settled loans are not holdings.
         let mut repaid = loan(true);
         repaid.status = LoanStatus::Repaid;

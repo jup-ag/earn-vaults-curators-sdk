@@ -11,7 +11,7 @@
 //! Rules every valuation keeps:
 //! - **Fail closed.** A key the snapshot never fetched, a missing account that
 //!   must exist, a wrong owner or layout, a stale or out-of-band price, an
-//!   overdue Offerbook loan, or a holding with no priced row is an [`Error`],
+//!   overdue Offerbook loan the vault lent, or a holding with no priced row is an [`Error`],
 //!   never a zero.
 //! - **Round against the vault.** Assets are struck at price − confidence and
 //!   rounded down; liabilities at price + confidence and rounded up. This is
@@ -120,12 +120,13 @@ impl core::fmt::Display for PriceFault {
 }
 
 /// Why an Offerbook loan cannot be valued. [`Self::PastDue`] is the one a
-/// keeper acts on: the lender may claim, and the borrower can only settle in
-/// full.
+/// keeper acts on: claim the loan the vault lent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoanFault {
-    /// At or past `expired_at`: Offerbook allows a claim, refuses paydowns and
-    /// extensions, and still takes full settlement, so the value is unknown.
+    /// A loan the vault lent, at or past `expired_at`: Offerbook allows a
+    /// claim and still takes full settlement, so the receivable is unknown.
+    /// A borrowed loan past due is valued instead; see
+    /// [`crate::offerbook::OfferbookValuation::overdue_borrowed`].
     PastDue,
     NotClassic,
     ZeroDuration,
