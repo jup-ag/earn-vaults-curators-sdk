@@ -15,6 +15,13 @@ The vaults run program 0.1.0. Vault accounts have the same 2,334-byte layout on
 | `bitwise-susdai-yield.json` | `Hj9eXER2esW7FMSX1UjgNk29ToX2rpa4QF6ZCKVvXgdH` | Earn, Offerbook (68 active lent loans, escrow yield) |
 | `re7-nopal-lending.json` | `6QDoDjzvgUKaaYBptR9CGebT4WUTKd7tTDRwvgD1jmvD` | Earn (empty), Offerbook (3 lent loans) |
 | `re7-nopal-looping.json` | `9EdtkcPbuM8zsyhknzo2CRLyPVXNJXCt6zgSjviMYCNc` | Offerbook (3 borrowed loans); its Nest slot is out of scope |
+| `bitwise-susdai-multiply.json` | `bcYAZdziuuaYHAkrT3WP3dLzDUQg7XJVPxYwXUaah5w` | Offerbook (63 borrowed loans against sUSDai at a hand-written price); its Jupiter Lend slot is out of scope |
+
+`bitwise-susdai-multiply.json` was recorded on 2026-11-26 in the order
+`OfferbookPlan` requires: the discovery read, then the `loan_filters` scans,
+then the valuation read. Its plan names 140 accounts, more than one
+`getMultipleAccounts` takes, so the valuation read (with the two custody ATAs)
+is two batches that reported the same context slot.
 
 ## `expected`
 
@@ -32,6 +39,8 @@ All values are numéraire micro-units.
   the vault's own Offerbook fee profile or else `Config.repay_fee_bps`.
 - `onchain_mark`: the slot's `last_value` at the recorded slot, posted
   `onchain_mark_age_seconds` before it.
+- `unaccrued_borrow_interest`: the part of the borrowed loans' booked interest
+  not yet accrued at the recorded clock time, in USDC units.
 
 Where the numbers differ:
 
@@ -44,3 +53,9 @@ Where the numbers differ:
   USDC). The managed path counts it.
 - RE7 Looping Offerbook: within 2 micro-units of the other copies, which round
   each loan separately. This crate sums per mint, then rounds once.
+- sUSDai Multiply Offerbook: 67 micro-units above the curator API, which rounds
+  each loan separately; the market maker's borrowing path refuses Token-2022
+  collateral. The curator's own mark, posted a second before, is 0.97% higher:
+  it counts borrowed interest accrued so far, where Offerbook's repay amount,
+  the API and this crate take the period's full interest. The unaccrued
+  interest is 97% of the gap.

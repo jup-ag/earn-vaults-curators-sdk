@@ -76,15 +76,21 @@ impl Fixture {
         OfferbookPlan::new(self.vault, &self.snapshot(), scan).unwrap()
     }
 
-    /// Every key a plan names was fetched, so one read covers it.
+    /// Every key a plan names was fetched, and one `getMultipleAccounts`
+    /// (100 keys) reads them all.
     fn covers(&self, keys: &[Address]) {
+        self.recorded(keys);
+        assert!(keys.len() <= 100, "one getMultipleAccounts takes 100 keys");
+    }
+
+    /// Every key a plan names was fetched.
+    fn recorded(&self, keys: &[Address]) {
         for key in keys {
             assert!(
                 self.accounts.iter().any(|(k, _)| k == key),
                 "{key} not recorded"
             );
         }
-        assert!(keys.len() <= 100, "one getMultipleAccounts takes 100 keys");
     }
 
     /// The same accounts with `edit` applied to one of them.
@@ -317,6 +323,54 @@ fn re7_looping_nets_collateral_against_full_debt() {
         (bps(nearest, last) - 10.0).abs() < 0.01,
         "one window: 10 bps"
     );
+}
+
+#[test]
+fn susdai_multiply_nets_borrowed_loans_at_a_hand_written_price() {
+    let f = load("bitwise-susdai-multiply");
+    let snapshot = f.snapshot();
+    let plan = f.offerbook();
+    // 63 borrowed loans: the plan names 140 accounts, two reads at one slot.
+    assert_eq!((plan.lent.len(), plan.borrowed.len()), (0, 63));
+    let keys = plan.keys();
+    f.recorded(&keys);
+    assert_eq!(keys.len(), 140);
+    let book = plan.value(&snapshot).unwrap();
+    assert_eq!(book.value, f.expect("offerbook", "sdk"));
+    // The curator API rounds each loan's collateral and debt separately: two
+    // micro-units per loan at most.
+    let api = f.expect("offerbook", "curator_api");
+    assert!(
+        book.value.abs_diff(api) <= 2 * 63,
+        "{} vs {api}",
+        book.value
+    );
+    assert_eq!(book.repay_fee_bps, None, "a borrower pays no repay fee");
+    assert!(book.overdue_borrowed.is_empty());
+    // sUSDai is a Token-2022 row whose price the curator's bot writes by hand:
+    // no confidence band, so assets and debt differ only by USDC's.
+    let state = snapshot.vault(&f.vault).unwrap();
+    let susdai: Address = "sUSDai6Y3GxysDEtA9BVcEFTaog6UZpYUVxJiMhAKYE"
+        .parse()
+        .unwrap();
+    let (_, row) = earn_vaults_upkeep::price::row(state, &susdai).unwrap();
+    assert!(row.manual_price());
+    assert_eq!(row.last_conf.get(), 0);
+    // The curator's mark, a second old, counts borrowed interest accrued so
+    // far; Offerbook's repay amount, and this crate, take the period's full
+    // interest. The unaccrued interest is most of the gap.
+    let mark = f.expect("offerbook", "onchain_mark");
+    let unaccrued = f.expect("offerbook", "unaccrued_borrow_interest");
+    let gap = mark - book.value;
+    assert!(
+        gap > unaccrued && (gap - unaccrued) * 20 < unaccrued,
+        "{gap} vs {unaccrued}"
+    );
+    // A 0.97% move is more than one mark may make: the keeper is told.
+    assert!(matches!(
+        book.slot.decide(book.value, book.now),
+        MarkDecision::OutOfBudget { .. }
+    ));
 }
 
 #[test]
