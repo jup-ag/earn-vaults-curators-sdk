@@ -117,7 +117,19 @@ fn juplend_optimizer_earn_equals_the_optimizer_and_the_chain() {
     assert_eq!(earn.value, f.expect("earn", "onchain_mark"));
     assert_eq!(earn.markets.len(), 5);
     assert!(
-        OfferbookPlan::new(f.vault, &snapshot, LoanScan::default()).is_err(),
+        matches!(
+            OfferbookPlan::new(
+                f.vault,
+                &snapshot,
+                LoanScan {
+                    lent: vec![],
+                    borrowed: vec![],
+                    first_slot: f.slot,
+                    last_slot: f.slot,
+                },
+            ),
+            Err(Error::Position("Offerbook", _))
+        ),
         "no Offerbook slot"
     );
 

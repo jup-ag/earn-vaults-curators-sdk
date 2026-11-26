@@ -23,8 +23,8 @@ use {
         instructions::{CrystallizeFees, FulfillRedeem, PriceOpaque, ValidateAum},
         pda::{derive_associated_token_account, derive_escrow, derive_share_mint},
         state::{
-            Account as _, Escrow, FULFILLED_PARTIAL, FULFILLED_PENDING, Pause, REQUEST_TYPE_REDEEM,
-            Vault,
+            Account as _, Escrow, FULFILLED_PARTIAL, FULFILLED_PENDING, MAX_POSITIONS, Pause,
+            REQUEST_TYPE_REDEEM, Vault,
         },
     },
     solana_address::Address,
@@ -123,6 +123,10 @@ pub fn attest(
     marks: &[Mark],
 ) -> Result<Vec<Instruction>> {
     for (i, mark) in marks.iter().enumerate() {
+        // A higher `slot` byte addresses an asset row or a sink, not a position.
+        if mark.slot >= MAX_POSITIONS {
+            return Err(Error::Job("mark slot is not a position"));
+        }
         if marks[..i].iter().any(|m| m.slot == mark.slot) {
             return Err(Error::Job("two marks for one slot"));
         }
@@ -359,6 +363,8 @@ mod tests {
         let data = vault_bytes();
         let keys = keys(&data);
         assert!(attest(&keys, vec![], &[mark(0, 1, false), mark(0, 2, false)]).is_err());
+        // 128 is asset row 0's manual price, not a position.
+        assert!(attest(&keys, vec![], &[mark(128, 1, false)]).is_err());
         // Past bootstrap, `decide` yields a zero first mark to attest an
         // empty slot; it goes after a validation like any first mark.
         let ixs = attest(&keys, vec![], &[mark(0, 0, true)]).unwrap();

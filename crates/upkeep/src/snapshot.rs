@@ -73,10 +73,19 @@ impl Snapshot {
     /// `vault` and `clock` are the vault and clock sysvar a simulation of the
     /// refresh returns (`simulateTransaction` with `accounts`). The simulation
     /// cannot return the whole snapshot: it returns at most as many accounts as
-    /// the transaction lists. So holdings stay as read at [`Self::slot`] and only the
-    /// asset rows' cached readings and `prices_changed_at` are taken from
-    /// the refreshed vault. The transaction installs the same signed readings.
-    /// Valuations then gate prices at the simulated clock time.
+    /// the transaction lists. So holdings stay as read at [`Self::slot`]. From
+    /// the refreshed vault come only each row's cached reading, its price-gate
+    /// limits (staleness, confidence, future skew: the ones execution checks),
+    /// and `prices_changed_at`. Valuations then gate prices at the simulated
+    /// clock time.
+    ///
+    /// The transaction installs the simulated readings only when the refresh
+    /// carries them: a Pyth Pro message or Chainlink Data Streams reports.
+    /// Pyth Core and OCR2 refreshes name price accounts, which can advance
+    /// before execution, and a refresh by someone else can land in between, so
+    /// the mark can trail custody by that move. To rule it out, simulate the
+    /// final list with the vault in `accounts` and compare its rows' readings
+    /// to the ones valued.
     pub fn with_refresh(
         &self,
         vault_key: &Address,
@@ -110,6 +119,13 @@ impl Snapshot {
             address: *vault_key,
             reason: "not a vault account",
         })?;
+        if fresh.share_mint != state.share_mint {
+            return Err(Error::Layout {
+                what: "refreshed vault",
+                address: *vault_key,
+                reason: "a different vault's account",
+            });
+        }
         for (row, new) in state.assets.iter_mut().zip(&fresh.assets) {
             let identity = |a: &earn_vaults_sdk::state::AssetConfig| {
                 (a.configured(), a.mint, a.decimals, a.oracle, a.quote_oracle)
@@ -123,6 +139,9 @@ impl Snapshot {
             row.last_publish_time = new.last_publish_time;
             row.base_publish_time = new.base_publish_time;
             row.quote_publish_time = new.quote_publish_time;
+            row.max_staleness_seconds = new.max_staleness_seconds;
+            row.max_confidence_bps = new.max_confidence_bps;
+            row.max_future_skew_seconds = new.max_future_skew_seconds;
         }
         state.prices_changed_at = fresh.prices_changed_at;
         Ok(Self {
@@ -432,6 +451,20 @@ pub(crate) mod tests {
         assert!(matches!(
             snapshot.with_refresh(&key, &fresh, &clock(9, 999).1.unwrap()),
             Err(Error::ReadOrder(_))
+        ));
+        // A tightened confidence cap comes with the refresh, so the gate uses it.
+        let mut tightened = fresh.clone();
+        Vault::read_mut(&mut tightened.data).unwrap().assets[0].max_confidence_bps =
+            earn_vaults_sdk::zeropod::U16::from(7u16);
+        let v = snapshot
+            .with_refresh(&key, &tightened, &clock(12, 1_005).1.unwrap())
+            .unwrap();
+        assert_eq!(v.vault(&key).unwrap().assets[0].max_confidence_bps.get(), 7);
+        let mut other = fresh.clone();
+        Vault::read_mut(&mut other.data).unwrap().share_mint = key;
+        assert!(matches!(
+            snapshot.with_refresh(&key, &other, &clock(12, 1_005).1.unwrap()),
+            Err(Error::Layout { .. })
         ));
         let mut moved = fresh.clone();
         Vault::read_mut(&mut moved.data).unwrap().assets[0].mint = key;

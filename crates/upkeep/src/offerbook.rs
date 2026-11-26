@@ -21,8 +21,13 @@
 //! only the period it is in; the borrower paid the earlier ones at extension.
 //! Overdue loans, and any mint without a row, fail closed.
 //!
-//! A lent loan's collateral mint must be a priced row too, active or not: a
-//! claim moves that collateral into the escrow, where only row mints are read.
+//! A lent loan's collateral mint must be a priced row too, while the loan is
+//! active or claimed: a claim moves that collateral into the escrow, where
+//! only row mints are read. shortcut: a loan claimed before discovery is not
+//! in the plan, so collateral with no row in escrow reads as nothing; the
+//! curator must have listed the mint to value the loan while it was active.
+//! Close it with a listing of the `User`'s token accounts (as #24 does for
+//! the authority).
 //!
 //! Loans are found with `getProgramAccounts` ([`loan_filters`]), outside the
 //! one-slot read, and the reads are ordered so the scans prove the loan list:
@@ -91,7 +96,7 @@ pub fn loan_filters(vault: &Address) -> LoanFilters {
 }
 
 /// What the two [`loan_filters`] scans returned, with their context slots.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoanScan {
     pub lent: Vec<Address>,
     pub borrowed: Vec<Address>,
@@ -342,9 +347,10 @@ impl OfferbookPlan {
         if (loan.lender == self.authority) != lent || (loan.borrower == self.authority) == lent {
             return Err(fail(LoanFault::WrongSide));
         }
-        if lent {
+        if lent && loan.status != LoanStatus::Repaid {
             // Claimed collateral lands in the escrow, which is read only for
-            // row mints: without a row it would vanish from the mark.
+            // row mints: without a row it would vanish from the mark. A repaid
+            // loan's collateral went back to the borrower.
             let Asset::Token(collateral) = &loan.collateral else {
                 return Err(fail(LoanFault::CollateralNotToken));
             };
@@ -922,6 +928,10 @@ mod tests {
                 "{status:?}"
             );
         }
+        let mut repaid = loan(true);
+        repaid.collateral = token_asset(unlisted);
+        repaid.status = LoanStatus::Repaid;
+        assert!(value(accounts(&repaid, &loan(false))).is_ok());
     }
 
     #[test]

@@ -17,9 +17,9 @@
 //!   rounded down; liabilities at price + confidence and rounded up. This is
 //!   the vault program's own band (`Floor` for holdings, `Ceil` for payouts).
 //! - **Checked arithmetic.** An overflow is [`Error::Overflow`], never a wrap.
-//! - **Only marks the program accepts.** [`mark::SlotState::decide`] builds no
-//!   mark outside the slot's drift budget, and no zero first mark while the
-//!   vault is in bootstrap.
+//! - **No mark the drift guard refuses.** [`mark::SlotState::decide`] builds
+//!   no later mark outside the slot's drift budget, and no zero first mark
+//!   while the vault is in bootstrap. Its docs list what it does not model.
 //!
 //! [`jobs`] turns marks into instruction lists in the order program 0.2.0
 //! requires. Lists, never transactions: every signer mode wraps the same list.
@@ -120,10 +120,12 @@ impl core::fmt::Display for PriceFault {
 }
 
 /// Why an Offerbook loan cannot be valued. [`Self::PastDue`] is the one a
-/// keeper acts on: the loan is claimable (as lender) or must be repaid.
+/// keeper acts on: the lender may claim, and the borrower can only settle in
+/// full.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoanFault {
-    /// At or past `expired_at`, when Offerbook refuses repayment and allows a claim.
+    /// At or past `expired_at`: Offerbook allows a claim, refuses paydowns and
+    /// extensions, and still takes full settlement, so the value is unknown.
     PastDue,
     NotClassic,
     ZeroDuration,

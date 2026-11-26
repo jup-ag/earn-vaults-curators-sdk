@@ -28,7 +28,7 @@ pub struct SlotState {
     /// Seconds a mark stays valid for `ValidateAum`.
     pub max_staleness_seconds: i64,
     /// Drift cap per window, in bps of the prior mark; `None` when waived.
-    pub drift_cap_bps: Option<u64>,
+    pub drift_cap_bps: Option<u16>,
     /// `Vault.aum` as last validated: a later mark's drift budget is measured
     /// against the smaller of this and the prior mark.
     pub validated_aum: u64,
@@ -38,6 +38,9 @@ pub struct SlotState {
 }
 
 impl SlotState {
+    /// # Panics
+    ///
+    /// If `index` is not below `MAX_POSITIONS`.
     pub fn of(vault: &Vault, index: u8, vault_bootstrap: bool) -> Self {
         let position = &vault.positions[usize::from(index)];
         Self {
@@ -53,7 +56,9 @@ impl SlotState {
                 0 => i64::from(MAX_STALENESS_SECONDS),
                 seconds => i64::try_from(seconds).unwrap_or(i64::MAX),
             },
-            drift_cap_bps: drift_budget(position.max_drift_bps.get()),
+            // `drift_budget` widens the stored `u16`; a cap is at most `u16::MAX`.
+            drift_cap_bps: drift_budget(position.max_drift_bps.get())
+                .map(|bps| u16::try_from(bps).unwrap_or(u16::MAX)),
             validated_aum: vault.aum.get(),
         }
     }
@@ -73,9 +78,16 @@ impl SlotState {
     ///   [`MarkDecision::OutOfBudget`]: the chain would refuse it, and posting
     ///   anything else would not be the value.
     ///
-    /// Not modelled, so `Post` may still fail on chain: a first mark's cap
-    /// against the AUM the preceding `ValidateAum` computes, and a debt slot's
-    /// gate. `now` earlier than execution only shrinks the budget.
+    /// Not modelled, so `Post` may still fail on chain:
+    /// - a first mark's cap of the drift bps of the AUM the preceding
+    ///   `ValidateAum` computes;
+    /// - a debt slot's gate;
+    /// - `Pause::Strategy`, which refuses every delegate mark;
+    /// - the JupiterLend same-second fold path, where the program re-attests
+    ///   the prior value: for that second `decide` may report `OutOfBudget`
+    ///   where the program would accept.
+    ///
+    /// `now` earlier than execution only shrinks the budget.
     pub fn decide(&self, value: u64, now: i64) -> MarkDecision {
         if !self.initialized {
             if value == 0 && self.vault_bootstrap {
@@ -111,7 +123,7 @@ impl SlotState {
 
     /// The largest move `check_drift` accepts at `now`: `diff × 10⁴ × window`
     /// may not exceed `basis × cap × elapsed`, elapsed clamped to one window.
-    fn max_move(&self, cap_bps: u64, now: i64) -> u64 {
+    fn max_move(&self, cap_bps: u16, now: i64) -> u64 {
         let window = i64::from(MAX_STALENESS_SECONDS).max(1) as u128;
         let elapsed = (now.saturating_sub(self.last_priced_at).max(0) as u128).min(window);
         let basis = u128::from(self.last_value.min(self.validated_aum));
@@ -120,7 +132,8 @@ impl SlotState {
     }
 }
 
-/// Whether the vault is in bootstrap, reading its share mint from `snapshot`.
+/// Slot `index` of `vault`, with the vault's bootstrap state read from its
+/// share mint in `snapshot`.
 pub(crate) fn slot_state(
     snapshot: &Snapshot,
     vault_key: &Address,
@@ -257,7 +270,9 @@ pub fn find_slot(vault: &Vault, protocol: Protocol) -> Option<(u8, &PositionConf
 pub enum Grant {
     /// The vault-wide `PRICE` delegate.
     Vault,
-    /// The Earn-scoped `jupiter_lend::PRICE` delegate, for JupiterLend slots.
+    /// The Earn-scoped `jupiter_lend::PRICE` delegate. The program accepts it
+    /// only on a lender-only, non-debt JupiterLend slot, so a slot valued under
+    /// `EarnScope::AssumeNoFluid` signs with [`Grant::Vault`].
     JupiterLend,
 }
 
